@@ -1892,6 +1892,8 @@ dependencies = [
  "clap",
  "serde_json",
  "synapse-common",
+ "synapse-engined",
+ "synapse-rules",
  "toml",
 ]
 

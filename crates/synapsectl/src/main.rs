@@ -1,10 +1,12 @@
 //! `synapsectl`: command line interface for Synapse.
 //!
-//! Commands: `config-check`, `db-init`, `db-stats`, `db-cleanup` (M0) and
-//! `tail` (M1).
+//! Commands: `config-check`, `db-init`, `db-stats`, `db-cleanup` (M0),
+//! `tail` (M1), and `alerts`, `scan`, `rules`, `trust-baseline`, `integrity`,
+//! `hash-add` (M3).
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod detect;
 mod render;
 
 use std::io::{self, Write};
@@ -74,6 +76,64 @@ enum Command {
         #[arg(long)]
         file: Option<PathBuf>,
     },
+    /// Show the newest alerts from the database.
+    Alerts {
+        #[arg(short = 'n', long, default_value_t = 20)]
+        lines: usize,
+        /// One JSON object per line.
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
+    /// Check files now (pacman trust, hash table, YARA). Directories are walked; symlinks are not followed.
+    /// Exits with status 1 when anything was found.
+    Scan {
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// Only print findings.
+        #[arg(short, long)]
+        quiet: bool,
+        /// Rules directory instead of `engine.rules_dir`.
+        #[arg(long)]
+        rules: Option<PathBuf>,
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
+    /// Validate the behavior and YARA rules and list them.
+    Rules {
+        /// Rules directory instead of `engine.rules_dir`.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// Load what pacman installed (every package's mtree) into the trust cache.
+    TrustBaseline {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// pacman's local database (default /var/lib/pacman/local).
+        #[arg(long)]
+        pacman_local: Option<PathBuf>,
+    },
+    /// Hash every package file in the trust cache and report the ones that differ from pacman's record.
+    /// Exits with status 1 when a file differs.
+    Integrity {
+        /// Only this package.
+        #[arg(long)]
+        package: Option<String>,
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
+    /// Add a file or SHA-256 to the hash table as bad (the default) or good.
+    HashAdd {
+        /// A file, or a SHA-256 in hex.
+        what: String,
+        #[arg(long)]
+        good: bool,
+        #[arg(long)]
+        label: Option<String>,
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -83,6 +143,55 @@ fn main() -> ExitCode {
         level: LogLevel::Warn,
         format: LogFormat::Text,
     });
+
+    // M3 commands report plain messages and may exit 1 for "found something"
+    let found = match &cli.command {
+        Command::Alerts { lines, json, db } => {
+            Some(detect::alerts(&cli.config, db.as_deref(), *lines, *json).map(|()| false))
+        }
+        Command::Scan {
+            paths,
+            quiet,
+            rules,
+            db,
+        } => Some(detect::scan(
+            &cli.config,
+            db.as_deref(),
+            rules.as_deref(),
+            paths,
+            *quiet,
+        )),
+        Command::Rules { dir } => Some(detect::rules(&cli.config, dir.as_deref()).map(|()| false)),
+        Command::TrustBaseline { db, pacman_local } => Some(
+            detect::trust_baseline(&cli.config, db.as_deref(), pacman_local.as_deref())
+                .map(|()| false),
+        ),
+        Command::Integrity { package, db } => Some(detect::integrity(
+            &cli.config,
+            db.as_deref(),
+            package.as_deref(),
+        )),
+        Command::HashAdd {
+            what,
+            good,
+            label,
+            db,
+        } => Some(
+            detect::hash_add(&cli.config, db.as_deref(), what, *good, label.as_deref())
+                .map(|()| false),
+        ),
+        _ => None,
+    };
+    if let Some(r) = found {
+        return match r {
+            Ok(false) => ExitCode::SUCCESS,
+            Ok(true) => ExitCode::from(1),
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
 
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
@@ -149,6 +258,12 @@ fn run(cli: &Cli) -> Result<(), Error> {
                 file: file.as_deref(),
             },
         ),
+        Command::Alerts { .. }
+        | Command::Scan { .. }
+        | Command::Rules { .. }
+        | Command::TrustBaseline { .. }
+        | Command::Integrity { .. }
+        | Command::HashAdd { .. } => Ok(()), // handled in main
         Command::DbCleanup { db } => {
             let cfg = Config::load(&cli.config)?;
             let path = db.clone().unwrap_or_else(|| cfg.db_path());

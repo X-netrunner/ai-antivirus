@@ -16,10 +16,10 @@ use std::io::BufRead;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use synapse_common::config::Config;
-use synapse_common::event::Envelope;
+use synapse_common::event::{now_ns, Envelope};
 use synapse_common::eventlog::{self, Follower};
 use synapse_common::store::{NewAlert, Store};
 use synapse_rules::rule::RuleSet;
@@ -34,12 +34,6 @@ const WARMUP_LINES: usize = 200_000;
 const POLL: Duration = Duration::from_millis(200);
 const SWEEP_EVERY: Duration = Duration::from_secs(10);
 const STATS_EVERY: Duration = Duration::from_secs(300);
-
-pub fn now_ns() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
-}
 
 /// Load the behavior rules and YARA rules under `rules_dir` and build an engine. Broken rules are an error: an engine that
 /// silently runs without its rules is worse than one that does not start.

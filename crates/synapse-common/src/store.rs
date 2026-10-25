@@ -595,7 +595,9 @@ mod tests {
         );
         // an upgrade that dropped a file removes it from the cache
         assert_eq!(
-            store.trust_replace_package("bash", std::slice::from_ref(&e)).unwrap(),
+            store
+                .trust_replace_package("bash", std::slice::from_ref(&e))
+                .unwrap(),
             1
         );
         assert!(store.trust_get(b"/usr/bin/old").unwrap().is_none());
