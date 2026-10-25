@@ -29,6 +29,10 @@ pub struct MtreeEntry {
     /// Whole seconds (mtree has fractions; file systems compare on seconds here).
     pub mtime_s: i64,
     pub sha256: Sha256,
+    /// Permission bits as pacman installed them (octal in the file; 0o644 when the entry says nothing).
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
 }
 
 /// An installed package's name and its database directory.
@@ -124,6 +128,7 @@ fn unescape(s: &str) -> Option<Vec<u8>> {
 /// metadata entries (`./.PKGINFO`, `./.BUILDINFO`, `./.INSTALL`, `./.MTREE`, `./.CHANGELOG`) are skipped.
 pub fn parse_mtree<R: BufRead>(reader: R) -> Result<Vec<MtreeEntry>> {
     let mut defaults_type = String::new();
+    let (mut def_mode, mut def_uid, mut def_gid) = (0o644u32, 0u32, 0u32);
     let mut out = Vec::new();
     for line in reader.lines() {
         let line = line.map_err(|e| Error::Mtree(e.to_string()))?;
@@ -137,6 +142,12 @@ pub fn parse_mtree<R: BufRead>(reader: R) -> Result<Vec<MtreeEntry>> {
             for kv in fields {
                 if let Some(t) = kv.strip_prefix("type=") {
                     defaults_type = t.to_owned();
+                } else if let Some(v) = kv.strip_prefix("mode=") {
+                    def_mode = u32::from_str_radix(v, 8).unwrap_or(def_mode);
+                } else if let Some(v) = kv.strip_prefix("uid=") {
+                    def_uid = v.parse().unwrap_or(def_uid);
+                } else if let Some(v) = kv.strip_prefix("gid=") {
+                    def_gid = v.parse().unwrap_or(def_gid);
                 }
             }
             continue;
@@ -151,6 +162,7 @@ pub fn parse_mtree<R: BufRead>(reader: R) -> Result<Vec<MtreeEntry>> {
             continue;
         }
         let (mut kind, mut size, mut time, mut sha) = (defaults_type.clone(), None, None, None);
+        let (mut mode, mut uid, mut gid) = (def_mode, def_uid, def_gid);
         for kv in fields {
             let Some((k, v)) = kv.split_once('=') else {
                 continue;
@@ -160,6 +172,9 @@ pub fn parse_mtree<R: BufRead>(reader: R) -> Result<Vec<MtreeEntry>> {
                 "size" => size = v.parse::<u64>().ok(),
                 "time" => time = v.split('.').next().and_then(|s| s.parse::<i64>().ok()),
                 "sha256digest" => sha = v.parse::<Sha256>().ok(),
+                "mode" => mode = u32::from_str_radix(v, 8).unwrap_or(mode),
+                "uid" => uid = v.parse().unwrap_or(uid),
+                "gid" => gid = v.parse().unwrap_or(gid),
                 _ => {}
             }
         }
@@ -177,6 +192,9 @@ pub fn parse_mtree<R: BufRead>(reader: R) -> Result<Vec<MtreeEntry>> {
             size,
             mtime_s,
             sha256,
+            mode,
+            uid,
+            gid,
         });
         if out.len() > MAX_ENTRIES_PER_PACKAGE {
             return Err(Error::Mtree(format!(
@@ -228,6 +246,8 @@ mod tests {
         assert_eq!(e[0].path, PathBuf::from("/usr/bin/bash"));
         assert_eq!(e[0].size, 1_112_880);
         assert_eq!(e[0].mtime_s, 1_700_000_123);
+        assert_eq!((e[0].mode, e[0].uid, e[0].gid), (0o755, 0, 0));
+        assert_eq!(e[1].mode, 0o644, "the /set default applies");
         assert_eq!(e[1].path, PathBuf::from("/usr/share/doc/a file"));
     }
 

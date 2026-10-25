@@ -137,6 +137,25 @@ pub fn check_file(
     Ok(())
 }
 
+/// May the responder restore this file from its package? Restoring puts back bytes that match pacman's own record, so
+/// it is allowed where quarantining is not (Synapse's own files, systemd units); it never touches pacman's database or
+/// device files, and never runs during a pacman transaction.
+pub fn check_restore(path: &Path, cx: &Context<'_>) -> Result<(), Refusal> {
+    if !clean_abs(path) {
+        return no(format!("{} is not a clean absolute path", path.display()));
+    }
+    if cx.pacman_active {
+        return no("a pacman transaction is running (/var/lib/pacman/db.lck); no destructive action until it ends");
+    }
+    let s = path.to_string_lossy();
+    for d in ["/proc/", "/sys/", "/var/lib/pacman/", "/dev/"] {
+        if s.starts_with(d) {
+            return no(format!("files under {d} are never restored"));
+        }
+    }
+    Ok(())
+}
+
 /// May the responder block this address?
 pub fn check_ip(ip: IpAddr) -> Result<(), Refusal> {
     let bad = match ip {

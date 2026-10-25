@@ -24,6 +24,7 @@ use crate::nft::{self, Nft};
 use crate::notify::{Notification, Notifier};
 use crate::procfs::{LiveProc, ProcFs};
 use crate::quarantine::{Quarantine, Record};
+use crate::restore::{RestoreRecord, Restorer};
 
 /// Levels above this always wait for a human in M4, whatever `response.auto_levels_max` says (spec 8: quarantine,
 /// block and restore need approval until the false-positive rate on the machine is known).
@@ -80,7 +81,6 @@ enum Decision {
     Execute,
     DryRun(String),
     Pending,
-    Skipped(String),
 }
 
 /// Everything the responder touches on the system. Swapped for fakes in tests.
@@ -88,6 +88,7 @@ pub struct System {
     pub procfs: ProcFs,
     pub cgroups: Cgroups,
     pub quarantine: Quarantine,
+    pub restorer: Restorer,
     pub nft: Box<dyn Nft>,
     pub notifier: Notifier,
     pub pacman_active: Box<dyn Fn() -> bool + Send>,
@@ -100,6 +101,7 @@ impl System {
             procfs: ProcFs::system(),
             cgroups: Cgroups::new(&cfg.response.cgroup_root),
             quarantine: Quarantine::new(cfg.quarantine_dir()),
+            restorer: Restorer::new(&cfg.paths.state_dir),
             nft: Box::new(nft::NftCmd),
             notifier: Notifier::new(&cfg.response.notify_dir),
             pacman_active: Box::new(synapse_rules::mtree::pacman_active),
@@ -233,9 +235,6 @@ impl Responder {
         if action == Action::Notify {
             return Ok(Decision::Execute);
         }
-        if action == Action::Restore {
-            return Ok(Decision::Skipped("restore is not built yet (M6)".into()));
-        }
         let mode = self.cfg.general.mode;
         if level > mode.max_level() {
             return Ok(Decision::DryRun(format!(
@@ -362,7 +361,7 @@ impl Responder {
                 }
             },
             Decision::DryRun(reason) => {
-                let check = self.preview(&target);
+                let check = self.preview(action, &target);
                 let note = format!("{reason}; {check}");
                 self.update(id, ActionStatus::DryRun, None, Some(&note), None, now)?;
                 info!(
@@ -381,10 +380,6 @@ impl Responder {
                 format!(
                     "Waiting for your approval to {what}: synapsectl approve {id} (or reject {id})"
                 )
-            }
-            Decision::Skipped(reason) => {
-                self.update(id, ActionStatus::Skipped, None, Some(&reason), None, now)?;
-                format!("Not done: {what} ({reason})")
             }
         };
         self.notify(Notification {
@@ -443,7 +438,7 @@ impl Responder {
     }
 
     /// What a dry run would have run into (read-only).
-    fn preview(&self, target: &Target) -> String {
+    fn preview(&self, action: Action, target: &Target) -> String {
         let (allow, pacman, me) = self.cx();
         let cx = Context {
             allow_exe: &allow,
@@ -467,6 +462,10 @@ impl Responder {
                             )
                         }),
                 }
+            }
+            Target::File { path } if action == Action::Restore => {
+                guard::check_restore(Path::new(path), &cx)
+                    .and_then(|()| self.sys.restorer.plan(Path::new(path)).map_err(Refusal))
             }
             Target::File { path } => {
                 guard::check_file(Path::new(path), self.package_of(path).as_deref(), &cx).and_then(
@@ -545,6 +544,11 @@ impl Responder {
                     .quarantine
                     .put(id, Path::new(path))
                     .map_err(|e| format!("quarantine failed: {e}"))?;
+                Ok(Some(to_json(&rec)?))
+            }
+            (Action::Restore, Target::File { path }) => {
+                guard::check_restore(Path::new(path), &cx).map_err(refused)?;
+                let rec = self.sys.restorer.restore(id, Path::new(path))?;
                 Ok(Some(to_json(&rec)?))
             }
             (Action::Block, Target::Ip { addr }) => {
@@ -780,7 +784,12 @@ impl Responder {
                 nft::unblock(self.sys.nft.as_ref(), b.addr)?;
                 None
             }
-            Action::Restore => return Err("restore is not built yet (M6)".into()),
+            Action::Restore => {
+                let rec: RestoreRecord =
+                    serde_json::from_value(undo).map_err(|e| format!("bad undo record: {e}"))?;
+                self.sys.restorer.undo(id, &rec)?;
+                None
+            }
         };
         self.update(
             id,

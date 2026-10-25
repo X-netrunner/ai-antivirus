@@ -2030,6 +2030,7 @@ name = "synapse-responderd"
 version = "0.6.0"
 dependencies = [
  "clap",
+ "flate2",
  "libc",
  "serde",
  "serde_json",

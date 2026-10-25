@@ -16,6 +16,7 @@ pub mod notify;
 pub mod procfs;
 pub mod quarantine;
 pub mod responder;
+pub mod restore;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

@@ -252,6 +252,7 @@ mod tests {
             procfs: crate::procfs::ProcFs::new(dir.path()),
             cgroups: crate::cgroup::Cgroups::emulated(dir.path()),
             quarantine: crate::quarantine::Quarantine::new(dir.path().join("q")),
+            restorer: crate::restore::Restorer::new(dir.path()),
             nft: Box::new(crate::nft::fake::FakeNft::default()),
             notifier: crate::notify::Notifier::new(dir.path()),
             pacman_active: Box::new(|| false),

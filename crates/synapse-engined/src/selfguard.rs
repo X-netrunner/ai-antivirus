@@ -206,14 +206,17 @@ impl Engine {
                         actual,
                     } = finding
                     {
-                        out.push(alert(
+                        let mut a = alert(
                             ts_ns,
                             "SYN-T-0001",
                             Severity::Critical,
                             0.95,
                             "A Synapse file differs from what its package installed",
                             json!({"path": f.display().to_string(), "package": package, "expected_sha256": expected.to_string(), "sha256": actual.to_string()}),
-                        ));
+                        );
+                        // offered to the responder: put the package's copy back (needs `synapsectl approve`)
+                        a.action = Action::Restore;
+                        out.push(a);
                     }
                 }
             }
@@ -263,6 +266,7 @@ mod tests {
         assert_eq!(a.len(), 1);
         assert_eq!(a[0].rule_id, "SYN-T-0001");
         assert_eq!(a[0].detail["package"], "synapse-edr");
+        assert_eq!(a[0].action, Action::Restore);
         // during a pacman transaction a changed package file is expected
         let mut engine = Engine::new(Vec::new(), FileCheck::new(None, 1 << 20, 100), false);
         assert!(engine.self_check(&mut store, &[owned], true, 8).is_empty());

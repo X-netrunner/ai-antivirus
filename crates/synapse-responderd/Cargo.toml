@@ -19,6 +19,7 @@ synapse-sys = { path = "../synapse-sys" }
 tracing.workspace = true
 
 [dev-dependencies]
+flate2.workspace = true
 tempfile.workspace = true
 
 [lints]

@@ -64,6 +64,20 @@ impl Rig {
             procfs: ProcFs::new(dir.path().join("proc")),
             cgroups: Cgroups::emulated(dir.path().join("cg")),
             quarantine: Quarantine::new(dir.path().join("q")),
+            restorer: {
+                // an empty fake pacman database and cache: no host state leaks into the test
+                let (local, cache) = (
+                    dir.path().join("pacman-local"),
+                    dir.path().join("pkg-cache"),
+                );
+                std::fs::create_dir_all(&local).unwrap();
+                std::fs::create_dir_all(&cache).unwrap();
+                synapse_responderd::restore::Restorer::new(dir.path()).with_paths(
+                    &local,
+                    &cache,
+                    std::path::Path::new("/usr/bin/bsdtar"),
+                )
+            },
             nft: Box::new(nft.clone()),
             notifier: Notifier::new(dir.path().join("notify")),
             pacman_active: Box::new(move || p2.load(Ordering::Relaxed)),
@@ -460,7 +474,8 @@ fn dry_run_restore_and_approval_limits() {
         Some(200),
         json!({"path": "/usr/bin/ls"}),
     );
-    assert_eq!(rig.action(id).status, ActionStatus::Skipped);
+    // restore is level 6: above contain's cap (and dry_run is on), so it is only recorded
+    assert_eq!(rig.action(id).status, ActionStatus::DryRun);
 
     // contain mode caps at level 3: quarantine is only recorded
     let id = rig.alert("YARA:x", "quarantine", Some(200), json!({"path": "/tmp/x"}));
@@ -534,6 +549,7 @@ fn without_cgroups_kill_uses_a_pidfd_on_the_real_process() {
         procfs: ProcFs::system(),
         cgroups: Cgroups::new(dir.path().join("no-cgroup-here")),
         quarantine: Quarantine::new(dir.path().join("q")),
+        restorer: synapse_responderd::restore::Restorer::new(dir.path()),
         nft: Box::new(Nft::default()),
         notifier: Notifier::new(dir.path()),
         pacman_active: Box::new(|| false),
@@ -575,4 +591,41 @@ fn without_cgroups_kill_uses_a_pidfd_on_the_real_process() {
     let status = child.wait().unwrap();
     use std::os::unix::process::ExitStatusExt;
     assert_eq!(status.signal(), Some(9), "SIGKILL");
+}
+
+#[test]
+fn restore_waits_for_approval_even_in_enforce_mode_and_refuses_what_pacman_does_not_own() {
+    let mut rig = Rig::new(Mode::Enforce, |c, _| c.response.auto_levels_max = 6);
+    emulate(&rig);
+    let id = rig.alert(
+        "SYN-I-0001",
+        "restore",
+        Some(200),
+        json!({"path": "/usr/bin/ls"}),
+    );
+    assert_eq!(
+        rig.action(id).status,
+        ActionStatus::Pending,
+        "level 6 always waits for a person"
+    );
+    // approved, but the fake pacman database owns nothing: it fails with a reason and changes nothing
+    let reply = ipc::dispatch(&mut rig.r, &Request::Approve { id }, "uid 0");
+    assert_eq!(reply.data["status"], "failed", "{reply:?}");
+    assert!(
+        rig.action(id)
+            .error
+            .unwrap()
+            .contains("not a file of an installed package")
+            || rig.action(id).error.unwrap().contains("refused")
+    );
+    // paths pacman's database or the kernel's pseudo file systems hold are refused before anything else
+    let id = rig.alert(
+        "SYN-I-0001",
+        "restore",
+        Some(200),
+        json!({"path": "/var/lib/pacman/local/x/desc"}),
+    );
+    let reply = ipc::dispatch(&mut rig.r, &Request::Approve { id }, "uid 0");
+    assert_eq!(reply.data["status"], "skipped");
+    assert!(rig.action(id).error.unwrap().contains("never restored"));
 }
