@@ -139,7 +139,13 @@ mod tests {
         stats.ebpf_alive.store(true, Ordering::Relaxed);
         assert!(!stats.degraded(false, true));
         stats.ebpf_partial.store(true, Ordering::Relaxed);
-        assert!(stats.degraded(false, true), "an optional program is missing");
-        assert!(!stats.degraded(false, false), "eBPF not wanted: not degraded");
+        assert!(
+            stats.degraded(false, true),
+            "an optional program is missing"
+        );
+        assert!(
+            !stats.degraded(false, false),
+            "eBPF not wanted: not degraded"
+        );
     }
 }

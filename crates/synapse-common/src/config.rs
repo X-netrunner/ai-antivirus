@@ -516,7 +516,10 @@ mod tests {
             "sensors.fanotify_exclude",
             "sensors.ebpf_object",
         ] {
-            assert!(p.iter().any(|m| m.contains(needle)), "missing {needle}: {p:?}");
+            assert!(
+                p.iter().any(|m| m.contains(needle)),
+                "missing {needle}: {p:?}"
+            );
         }
     }
 

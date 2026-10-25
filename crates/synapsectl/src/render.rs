@@ -191,10 +191,19 @@ mod tests {
             "2023-11-14T22:13:20.123Z"
         );
         // A leap day.
-        assert_eq!(format_ts(951_782_400_000_000_000), "2000-02-29T00:00:00.000Z");
-        assert_eq!(format_ts(951_868_800_000_000_000), "2000-03-01T00:00:00.000Z");
+        assert_eq!(
+            format_ts(951_782_400_000_000_000),
+            "2000-02-29T00:00:00.000Z"
+        );
+        assert_eq!(
+            format_ts(951_868_800_000_000_000),
+            "2000-03-01T00:00:00.000Z"
+        );
         // The end of a year.
-        assert_eq!(format_ts(1_767_225_599_000_000_000), "2025-12-31T23:59:59.000Z");
+        assert_eq!(
+            format_ts(1_767_225_599_000_000_000),
+            "2025-12-31T23:59:59.000Z"
+        );
     }
 
     #[test]
@@ -240,7 +249,10 @@ mod tests {
                 sha256: None,
             }),
         ];
-        for (line, kind) in kinds_in_schema.iter().zip(["exit", "sensor_health", "file_write"]) {
+        for (line, kind) in kinds_in_schema
+            .iter()
+            .zip(["exit", "sensor_health", "file_write"])
+        {
             assert!(line.starts_with(kind), "{line}");
             assert!(EVENT_KINDS.contains(&kind));
         }

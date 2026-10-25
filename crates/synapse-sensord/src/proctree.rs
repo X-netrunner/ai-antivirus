@@ -108,7 +108,11 @@ impl ProcFs for RealProcFs {
         let mut pids = Vec::new();
         for entry in fs::read_dir(&self.root)? {
             let Ok(entry) = entry else { continue };
-            if let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) {
+            if let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|n| n.parse::<u32>().ok())
+            {
                 pids.push(pid);
             }
         }
@@ -145,7 +149,9 @@ pub type SharedTable = Arc<Mutex<ProcTable>>;
 /// Lock a shared table. A poisoned lock (a panic elsewhere) is recovered: the
 /// table only holds caches that heal themselves.
 pub fn lock(table: &SharedTable) -> MutexGuard<'_, ProcTable> {
-    table.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    table
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 pub struct ProcTable {
@@ -266,7 +272,13 @@ impl ProcTable {
                         Some(e) if e.ts_ns.abs_diff(start) <= TOLERANCE_NS => e.parent_tgid,
                         _ => stat.ppid,
                     };
-                    (ProcKey { pid, start_ns: start }, parent)
+                    (
+                        ProcKey {
+                            pid,
+                            start_ns: start,
+                        },
+                        parent,
+                    )
                 }
             }
             None => from_edge(edge)?,
@@ -292,7 +304,10 @@ impl ProcTable {
 
     fn parent_key(&self, ppid: u32) -> ProcKey {
         if ppid == 0 {
-            return ProcKey { pid: 0, start_ns: 0 };
+            return ProcKey {
+                pid: 0,
+                start_ns: 0,
+            };
         }
         if let Some(entry) = self.entries.get(&ppid) {
             return entry.key;
@@ -389,8 +404,7 @@ impl ProcTable {
             .iter()
             .filter(|(pid, entry)| match self.fs.stat(**pid) {
                 Some(stat) => {
-                    procinfo::start_ns(stat.start_ticks).abs_diff(entry.key.start_ns)
-                        > TOLERANCE_NS
+                    procinfo::start_ns(stat.start_ticks).abs_diff(entry.key.start_ns) > TOLERANCE_NS
                         && entry.key.start_ns != 0
                 }
                 None => true,

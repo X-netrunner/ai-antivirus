@@ -238,7 +238,10 @@ mod tests {
             vec![OsString::from("a"), OsString::new(), OsString::from("b")]
         );
         // Programs that rewrite their title may leave no trailing NUL.
-        assert_eq!(parse_cmdline(b"nginx: master"), vec![OsString::from("nginx: master")]);
+        assert_eq!(
+            parse_cmdline(b"nginx: master"),
+            vec![OsString::from("nginx: master")]
+        );
     }
 
     #[test]

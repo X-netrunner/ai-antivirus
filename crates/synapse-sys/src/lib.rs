@@ -153,10 +153,7 @@ fn bad(msg: &'static str) -> io::Error {
 }
 
 fn field<const N: usize>(bytes: &[u8], offset: usize) -> Option<[u8; N]> {
-    bytes
-        .get(offset..offset.checked_add(N)?)?
-        .try_into()
-        .ok()
+    bytes.get(offset..offset.checked_add(N)?)?.try_into().ok()
 }
 
 /// Decode a buffer of back-to-back `fanotify_event_metadata` records.
@@ -171,7 +168,9 @@ pub fn parse_events(buf: &[u8]) -> io::Result<Vec<FanEvent>> {
         let event_len = field::<4>(rest, 0)
             .map(u32::from_ne_bytes)
             .ok_or_else(|| bad("truncated fanotify record"))?;
-        let version = *rest.get(4).ok_or_else(|| bad("truncated fanotify record"))?;
+        let version = *rest
+            .get(4)
+            .ok_or_else(|| bad("truncated fanotify record"))?;
         let metadata_len = field::<2>(rest, 6)
             .map(u16::from_ne_bytes)
             .ok_or_else(|| bad("truncated fanotify record"))?;

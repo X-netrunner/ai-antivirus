@@ -195,10 +195,7 @@ mod tests {
         );
         assert_eq!(parent.pid, 1);
         assert_eq!(exe, Path::new("/usr/bin/foo"));
-        assert_eq!(
-            argv,
-            &vec![OsString::from("foo"), OsString::from("--bar")]
-        );
+        assert_eq!(argv, &vec![OsString::from("foo"), OsString::from("--bar")]);
         assert_eq!(cwd, Path::new("/tmp"));
         assert_eq!(cgroup, "/user.slice/app.service");
 

@@ -325,8 +325,16 @@ mod tests {
         put64(&mut b, offset_of!(ExecRecord, ts_boot_ns), 7);
         put32(&mut b, offset_of!(ExecRecord, flags), EXEC_FLAG_ARGV);
         put32(&mut b, offset_of!(ExecRecord, argc), 2);
-        put32(&mut b, offset_of!(ExecRecord, filename_len), u32::try_from(name.len() + 1).unwrap());
-        put32(&mut b, offset_of!(ExecRecord, argv_len), u32::try_from(argv.len()).unwrap());
+        put32(
+            &mut b,
+            offset_of!(ExecRecord, filename_len),
+            u32::try_from(name.len() + 1).unwrap(),
+        );
+        put32(
+            &mut b,
+            offset_of!(ExecRecord, argv_len),
+            u32::try_from(argv.len()).unwrap(),
+        );
         let n = offset_of!(ExecRecord, filename);
         b[n..n + name.len()].copy_from_slice(name);
         let a = offset_of!(ExecRecord, argv);
@@ -336,7 +344,8 @@ mod tests {
 
     #[test]
     fn fork_round_trips() {
-        let rec = Record::decode(&fork_bytes()).unwrap();
+        let bytes = fork_bytes();
+        let rec = Record::decode(&bytes).unwrap();
         assert_eq!(
             rec,
             Record::Fork(ForkRecord {
@@ -400,7 +409,10 @@ mod tests {
         let Record::Connect(r) = Record::decode(&c).unwrap() else {
             panic!("not a connect record");
         };
-        assert_eq!((r.tgid, r.family, r.proto, r.port), (8, AF_INET, PROTO_UDP, 53));
+        assert_eq!(
+            (r.tgid, r.family, r.proto, r.port),
+            (8, AF_INET, PROTO_UDP, 53)
+        );
         assert_eq!(&r.addr[..4], &[1, 1, 1, 1]);
     }
 

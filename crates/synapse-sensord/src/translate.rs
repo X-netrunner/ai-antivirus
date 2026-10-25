@@ -187,7 +187,11 @@ mod tests {
         let flags = if argv.is_empty() { 0 } else { EXEC_FLAG_ARGV };
         put32(&mut b, offset_of!(ExecRecord, flags), flags);
         put32(&mut b, offset_of!(ExecRecord, argc), argc);
-        put32(&mut b, offset_of!(ExecRecord, filename_len), (name.len() + 1) as u32);
+        put32(
+            &mut b,
+            offset_of!(ExecRecord, filename_len),
+            (name.len() + 1) as u32,
+        );
         put32(&mut b, offset_of!(ExecRecord, argv_len), argv.len() as u32);
         let n = offset_of!(ExecRecord, filename);
         b[n..n + name.len()].copy_from_slice(name);
@@ -201,8 +205,16 @@ mod tests {
         put32(&mut b, 0, KIND_EXIT);
         put32(&mut b, offset_of!(ExitRecord, tgid), tgid);
         put32(&mut b, offset_of!(ExitRecord, tid), tid);
-        put32(&mut b, offset_of!(ExitRecord, flags), u32::from(code.is_some()));
-        put32(&mut b, offset_of!(ExitRecord, code), code.unwrap_or(0) as u32);
+        put32(
+            &mut b,
+            offset_of!(ExitRecord, flags),
+            u32::from(code.is_some()),
+        );
+        put32(
+            &mut b,
+            offset_of!(ExitRecord, code),
+            code.unwrap_or(0) as u32,
+        );
         b
     }
 
@@ -210,7 +222,11 @@ mod tests {
         let mut b = vec![0u8; size_of::<ConnectRecord>()];
         put32(&mut b, 0, KIND_CONNECT);
         put32(&mut b, offset_of!(ConnectRecord, tgid), tgid);
-        put64(&mut b, offset_of!(ConnectRecord, ts_boot_ns), T5 + 1_000_000);
+        put64(
+            &mut b,
+            offset_of!(ConnectRecord, ts_boot_ns),
+            T5 + 1_000_000,
+        );
         b[offset_of!(ConnectRecord, family)..][..2].copy_from_slice(&family.to_ne_bytes());
         b[offset_of!(ConnectRecord, proto)] = proto;
         b[offset_of!(ConnectRecord, port)..][..2].copy_from_slice(&port.to_ne_bytes());
@@ -228,8 +244,7 @@ mod tests {
     impl Rig {
         fn new() -> Rig {
             let fake = FakeFs::default();
-            let table: SharedTable =
-                Arc::new(Mutex::new(ProcTable::new(Box::new(fake.clone()))));
+            let table: SharedTable = Arc::new(Mutex::new(ProcTable::new(Box::new(fake.clone()))));
             let (sink, rx) = Sink::channel(64);
             Rig {
                 tr: Translator::new(table, Box::new(fake.clone())),
@@ -254,23 +269,64 @@ mod tests {
         rig.fake.set(10, 1, 400);
         rig.tr.table.lock().unwrap().baseline().unwrap();
         rig.fake.set(20, 10, 500);
-        rig.fake.details(20, "/usr/bin/curl", "/home/u", "/user.slice/x.scope", &["stale"]);
+        rig.fake.details(
+            20,
+            "/usr/bin/curl",
+            "/home/u",
+            "/user.slice/x.scope",
+            &["stale"],
+        );
 
         rig.feed(&fork(10, 20, T5 + 2_000_000));
         assert!(rig.events().is_empty(), "forks are internal");
-        rig.feed(&exec(20, T5 + 3_000_000, b"curl", b"curl\0-s\0http://x\0", 3));
+        rig.feed(&exec(
+            20,
+            T5 + 3_000_000,
+            b"curl",
+            b"curl\0-s\0http://x\0",
+            3,
+        ));
 
         let events = rig.events();
-        let [Event::Exec { proc, parent, uid, exe, argv, cwd, cgroup }] = events.as_slice() else {
+        let [Event::Exec {
+            proc,
+            parent,
+            uid,
+            exe,
+            argv,
+            cwd,
+            cgroup,
+        }] = events.as_slice()
+        else {
             panic!("expected one Exec, got {events:?}");
         };
-        assert_eq!(*proc, ProcKey { pid: 20, start_ns: T5 });
-        assert_eq!(*parent, ProcKey { pid: 10, start_ns: 4_000_000_000 });
+        assert_eq!(
+            *proc,
+            ProcKey {
+                pid: 20,
+                start_ns: T5
+            }
+        );
+        assert_eq!(
+            *parent,
+            ProcKey {
+                pid: 10,
+                start_ns: 4_000_000_000
+            }
+        );
         assert_eq!(*uid, 1000);
-        assert_eq!(exe, &PathBuf::from("/usr/bin/curl"), "resolved path from /proc");
+        assert_eq!(
+            exe,
+            &PathBuf::from("/usr/bin/curl"),
+            "resolved path from /proc"
+        );
         assert_eq!(
             argv,
-            &vec![OsString::from("curl"), OsString::from("-s"), OsString::from("http://x")],
+            &vec![
+                OsString::from("curl"),
+                OsString::from("-s"),
+                OsString::from("http://x")
+            ],
             "kernel argv wins over /proc"
         );
         assert_eq!(cwd, &PathBuf::from("/home/u"));
@@ -289,21 +345,45 @@ mod tests {
 
         let events = rig.events();
         assert_eq!(events.len(), 2, "{events:?}");
-        let Event::Exec { proc, exe, argv, cwd, .. } = &events[0] else {
+        let Event::Exec {
+            proc,
+            exe,
+            argv,
+            cwd,
+            ..
+        } = &events[0]
+        else {
             panic!("expected Exec");
         };
-        assert_eq!(*proc, ProcKey { pid: 30, start_ns: T5 });
-        assert_eq!(exe, &PathBuf::from("/bin/true"), "falls back to the execve path");
+        assert_eq!(
+            *proc,
+            ProcKey {
+                pid: 30,
+                start_ns: T5
+            }
+        );
+        assert_eq!(
+            exe,
+            &PathBuf::from("/bin/true"),
+            "falls back to the execve path"
+        );
         assert_eq!(argv, &vec![OsString::from("true")]);
         assert_eq!(cwd, &PathBuf::new());
-        assert_eq!(events[1], Event::Exit { proc: *proc, code: 0 });
+        assert_eq!(
+            events[1],
+            Event::Exit {
+                proc: *proc,
+                code: 0
+            }
+        );
     }
 
     #[test]
     fn argv_falls_back_to_proc_when_the_kernel_sent_none() {
         let rig = Rig::new();
         rig.fake.set(40, 1, 500);
-        rig.fake.details(40, "/usr/bin/x", "/", "", &["x", "--flag"]);
+        rig.fake
+            .details(40, "/usr/bin/x", "/", "", &["x", "--flag"]);
         rig.feed(&exec(40, T5 + 1_000_000, b"x", b"", 0));
         let events = rig.events();
         let [Event::Exec { argv, .. }] = events.as_slice() else {
@@ -316,14 +396,26 @@ mod tests {
     fn proc_facts_of_a_reused_pid_are_never_used() {
         let rig = Rig::new();
         rig.fake.set(50, 1, 900); // a different, newer process owns pid 50 now
-        rig.fake.details(50, "/usr/bin/other", "/other", "/other.scope", &["other"]);
+        rig.fake
+            .details(50, "/usr/bin/other", "/other", "/other.scope", &["other"]);
         rig.feed(&fork(10, 50, T5));
         rig.feed(&exec(50, T5 + 1_000_000, b"/bin/real", b"real\0", 1));
         let events = rig.events();
-        let [Event::Exec { proc, exe, cwd, cgroup, argv, .. }] = events.as_slice() else {
+        let [Event::Exec {
+            proc,
+            exe,
+            cwd,
+            cgroup,
+            argv,
+            ..
+        }] = events.as_slice()
+        else {
             panic!("expected one Exec");
         };
-        assert_eq!(proc.start_ns, T5, "key comes from the fork, not the reused pid");
+        assert_eq!(
+            proc.start_ns, T5,
+            "key comes from the fork, not the reused pid"
+        );
         assert_eq!(exe, &PathBuf::from("/bin/real"));
         assert_eq!(cwd, &PathBuf::new());
         assert!(cgroup.is_empty());
@@ -346,8 +438,17 @@ mod tests {
             .into_iter()
             .filter(|e| matches!(e, Event::Exit { .. }))
             .collect();
-        let key = ProcKey { pid: 60, start_ns: T5 };
-        assert_eq!(exits[0], Event::Exit { proc: key, code: UNKNOWN_EXIT_CODE });
+        let key = ProcKey {
+            pid: 60,
+            start_ns: T5,
+        };
+        assert_eq!(
+            exits[0],
+            Event::Exit {
+                proc: key,
+                code: UNKNOWN_EXIT_CODE
+            }
+        );
         assert!(matches!(exits[1], Event::Exit { code: 7, .. }));
         assert_eq!(exits.len(), 2);
     }
@@ -365,7 +466,10 @@ mod tests {
 
         let events = rig.events();
         assert_eq!(events.len(), 2, "{events:?}");
-        let key = ProcKey { pid: 70, start_ns: T5 };
+        let key = ProcKey {
+            pid: 70,
+            start_ns: T5,
+        };
         assert_eq!(
             events[0],
             Event::Connect {

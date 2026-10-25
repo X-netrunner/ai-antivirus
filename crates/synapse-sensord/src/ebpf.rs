@@ -138,7 +138,10 @@ fn check_object_owner(uid: u32, mode: u32) -> Result<(), String> {
         return Err(format!("owned by uid {uid}, not root"));
     }
     if mode & 0o022 != 0 {
-        return Err(format!("mode {:o} lets group or others write it", mode & 0o7777));
+        return Err(format!(
+            "mode {:o} lets group or others write it",
+            mode & 0o7777
+        ));
     }
     Ok(())
 }
@@ -154,7 +157,10 @@ fn read_object(path: &Path) -> Result<Vec<u8>, String> {
         return Err(format!("{} is not a regular file", path.display()));
     }
     if meta.len() > MAX_OBJECT_BYTES {
-        return Err(format!("{} is larger than {MAX_OBJECT_BYTES} bytes", path.display()));
+        return Err(format!(
+            "{} is larger than {MAX_OBJECT_BYTES} bytes",
+            path.display()
+        ));
     }
     check_object_owner(meta.uid(), meta.mode())
         .map_err(|why| format!("refusing {}: {why}", path.display()))?;
@@ -171,16 +177,12 @@ fn attach(ebpf: &mut Ebpf, spec: &Spec) -> Result<(), String> {
         .ok_or_else(|| "not found in the eBPF object".to_owned())?;
     match spec.hook {
         Hook::Tracepoint(category, event) => {
-            let tp: &mut TracePoint = program
-                .try_into()
-                .map_err(|e: ProgramError| describe(e))?;
+            let tp: &mut TracePoint = program.try_into().map_err(|e: ProgramError| describe(e))?;
             tp.load().map_err(describe)?;
             tp.attach(category, event).map_err(describe)?;
         }
         Hook::Kprobe(function) => {
-            let kp: &mut KProbe = program
-                .try_into()
-                .map_err(|e: ProgramError| describe(e))?;
+            let kp: &mut KProbe = program.try_into().map_err(|e: ProgramError| describe(e))?;
             kp.load().map_err(describe)?;
             kp.attach(function, 0).map_err(describe)?;
         }
@@ -235,7 +237,10 @@ pub fn start(
     let mut partial = false;
     for spec in SPECS {
         if !(spec.available)(&offsets) {
-            warn!(program = spec.name, "skipped: the kernel lacks a field it reads");
+            warn!(
+                program = spec.name,
+                "skipped: the kernel lacks a field it reads"
+            );
             partial = true;
             continue;
         }
@@ -401,10 +406,18 @@ mod tests {
     fn every_program_is_planned_and_three_are_required() {
         let offsets = all_offsets();
         assert!(SPECS.iter().all(|s| (s.available)(&offsets)));
-        let required: Vec<&str> = SPECS.iter().filter(|s| s.required).map(|s| s.name).collect();
+        let required: Vec<&str> = SPECS
+            .iter()
+            .filter(|s| s.required)
+            .map(|s| s.name)
+            .collect();
         assert_eq!(
             required,
-            vec!["sched_process_fork", "sched_process_exec", "sched_process_exit"]
+            vec![
+                "sched_process_fork",
+                "sched_process_exec",
+                "sched_process_exit"
+            ]
         );
         let mut names: Vec<&str> = SPECS.iter().map(|s| s.name).collect();
         names.sort_unstable();
@@ -421,7 +434,10 @@ mod tests {
 
         let mut offsets = all_offsets();
         offsets.execve_argv = None;
-        assert!(missing_required(&offsets).is_empty(), "argv capture is optional");
+        assert!(
+            missing_required(&offsets).is_empty(),
+            "argv capture is optional"
+        );
         let unavailable: Vec<&str> = SPECS
             .iter()
             .filter(|s| !(s.available)(&offsets))

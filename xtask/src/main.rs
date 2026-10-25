@@ -58,7 +58,11 @@ fn build_ebpf(release: bool) -> Result<PathBuf, String> {
     let crate_dir = root.join("crates").join("synapse-ebpf");
 
     // Fail early, with the fix, when the toolchain is not there.
-    if Command::new("bpf-linker").arg("--version").output().is_err() {
+    if Command::new("bpf-linker")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
         return Err(
             "bpf-linker not found in PATH (install it: `cargo install bpf-linker`, or the Arch package if available)"
                 .to_owned(),
@@ -88,9 +92,7 @@ fn build_ebpf(release: bool) -> Result<PathBuf, String> {
     if release {
         cmd.arg("--release");
     }
-    let status = cmd
-        .status()
-        .map_err(|e| format!("cannot run cargo: {e}"))?;
+    let status = cmd.status().map_err(|e| format!("cannot run cargo: {e}"))?;
     if !status.success() {
         return Err(
             "the eBPF build failed. It needs rustup with a nightly toolchain and the rust-src component: \
@@ -106,7 +108,8 @@ fn build_ebpf(release: bool) -> Result<PathBuf, String> {
         .join(profile)
         .join("synapse-ebpf");
     let out_dir = root.join("target").join("bpf");
-    std::fs::create_dir_all(&out_dir).map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
+    std::fs::create_dir_all(&out_dir)
+        .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
     let out = out_dir.join("synapse-ebpf.o");
     std::fs::copy(&built, &out)
         .map_err(|e| format!("cannot copy {} to {}: {e}", built.display(), out.display()))?;

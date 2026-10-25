@@ -133,15 +133,16 @@ impl Offsets {
         F: Fn(&str, &str) -> Option<EventFormat>,
     {
         let mut used_defaults = false;
-        let mut pick = |category: &str, event: &str, field: &str, sizes: &[u32], default: u32| {
-            match load(category, event) {
+        let mut pick =
+            |category: &str, event: &str, field: &str, sizes: &[u32], default: u32| match load(
+                category, event,
+            ) {
                 Some(format) => format.field(field, sizes),
                 None => {
                     used_defaults = true;
                     Some(default)
                 }
-            }
-        };
+            };
         let fork_child_pid = pick(
             "sched",
             "sched_process_fork",
@@ -245,7 +246,11 @@ format:
         let f = parse_format(FORK_FORMAT);
         assert_eq!(f.field("child_pid", &[4]), Some(44));
         assert_eq!(f.field("parent_pid", &[4]), Some(24));
-        assert_eq!(f.field("child_comm", &[16]), Some(28), "array suffix stripped");
+        assert_eq!(
+            f.field("child_comm", &[16]),
+            Some(28),
+            "array suffix stripped"
+        );
         assert_eq!(f.field("common_type", &[2]), Some(0));
     }
 
@@ -268,7 +273,9 @@ format:
 
     #[test]
     fn garbage_is_ignored() {
-        let f = parse_format("field:\nfield:int x;\noffset:1;\nfield:int y;\toffset:z;\tsize:4;\n\u{0}\u{1}");
+        let f = parse_format(
+            "field:\nfield:int x;\noffset:1;\nfield:int y;\toffset:z;\tsize:4;\n\u{0}\u{1}",
+        );
         assert_eq!(f, EventFormat::default());
     }
 
