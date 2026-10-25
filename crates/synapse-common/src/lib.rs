@@ -4,6 +4,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod config;
+pub mod entropy;
 pub mod error;
 pub mod event;
 pub mod eventlog;

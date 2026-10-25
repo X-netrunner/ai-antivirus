@@ -136,10 +136,14 @@ pub fn describe(event: &Event) -> String {
             path: file,
             size,
             sha256,
+            head_entropy,
         } => {
             let mut line = format!("file_write    {proc} {} size={size}", path(file));
             if let Some(hash) = sha256 {
                 let _ = write!(line, " sha256={hash}");
+            }
+            if let Some(e) = head_entropy {
+                let _ = write!(line, " entropy={}.{:03}", e / 1000, e % 1000);
             }
             line
         }
@@ -259,6 +263,7 @@ mod tests {
                 path: PathBuf::from("/x"),
                 size: 3,
                 sha256: None,
+                head_entropy: None,
             }),
         ];
         for (line, kind) in kinds_in_schema

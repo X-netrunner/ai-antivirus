@@ -53,6 +53,7 @@ pub fn all_event_variants() -> Vec<Event> {
             path: PathBuf::from("/etc/ld.so.preload"),
             size: 4096,
             sha256: Some(Sha256([0xab; 32])),
+            head_entropy: Some(7950),
         },
         Event::FileCreate {
             proc: pk(102),

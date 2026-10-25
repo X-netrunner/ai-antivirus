@@ -9,10 +9,12 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use synapse_common::entropy;
 use synapse_common::event::{Event, ProcKey};
 use synapse_sys::{FanEvent, Fanotify, FAN_CLOSE_WRITE, FAN_Q_OVERFLOW};
 use tracing::{error, warn};
@@ -96,13 +98,16 @@ impl Handler {
             return;
         }
 
-        let size = File::from(fd).metadata().map_or(0, |meta| meta.len());
+        let file = File::from(fd);
+        let size = file.metadata().map_or(0, |meta| meta.len());
+        let head_entropy = head_entropy(&file);
         let proc = self.proc_key(pid);
         self.sink.send(Event::FileWrite {
             proc,
             path,
             size,
             sha256: None,
+            head_entropy,
         });
     }
 
@@ -125,6 +130,14 @@ impl Handler {
         self.recent.insert(key, now);
         false
     }
+}
+
+/// Entropy of the first 4 KiB, read through the event's own descriptor (the kernel opened it read-only for us), so no path
+/// lookup races with a rename.
+fn head_entropy(file: &File) -> Option<u16> {
+    let mut buf = [0u8; entropy::SAMPLE_BYTES];
+    let n = file.read_at(&mut buf, 0).ok()?;
+    entropy::shannon_milli(&buf[..n])
 }
 
 /// Resolve an event descriptor to the file's path via `/proc/self/fd`.
@@ -229,6 +242,7 @@ mod tests {
             path: got,
             size,
             sha256,
+            head_entropy,
         }] = events.as_slice()
         else {
             panic!("expected one FileWrite, got {events:?}");
@@ -237,6 +251,7 @@ mod tests {
         assert_eq!(*got, path);
         assert_eq!(*size, 5);
         assert!(sha256.is_none());
+        assert!(head_entropy.is_none(), "5 bytes are too few for a figure");
     }
 
     #[test]

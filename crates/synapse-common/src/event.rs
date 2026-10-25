@@ -347,6 +347,10 @@ pub enum Event {
         path: PathBuf,
         size: u64,
         sha256: Option<Sha256>,
+        /// Entropy of the file's first 4 KiB in milli-bits per byte (0..=8000), see `entropy::shannon_milli`; None when the
+        /// file is too small or was not readable. Added in M3; older logs omit it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        head_entropy: Option<u16>,
     },
     FileCreate {
         proc: ProcKey,
