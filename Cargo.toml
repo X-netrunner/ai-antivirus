@@ -25,6 +25,7 @@ publish = false
 
 [workspace.dependencies]
 aya = "0.13"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 clap = { version = "4", features = ["derive"] }
 flate2 = "1"
 libc = "0.2"

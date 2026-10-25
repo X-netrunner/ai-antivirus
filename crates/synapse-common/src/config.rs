@@ -158,6 +158,12 @@ pub struct EngineConfig {
     pub scan_on_write: bool,
     /// At most this many automatic scans per second; the rest are skipped and counted.
     pub max_scans_per_sec: u32,
+    /// Only load rules whose bundle is signed (`bundle.manifest` + `bundle.sig`, see `synapsectl rules-sign`). Added in M6.
+    pub require_signed_rules: bool,
+    /// The public key that verifies the bundle.
+    pub rules_pubkey: PathBuf,
+    /// Files the engine checks against pacman's records every few minutes (Synapse's own binaries).
+    pub self_check_files: Vec<PathBuf>,
 }
 
 impl Default for EngineConfig {
@@ -177,6 +183,20 @@ impl Default for EngineConfig {
             yara_timeout_ms: 2000,
             scan_on_write: true,
             max_scans_per_sec: 50,
+            require_signed_rules: false,
+            rules_pubkey: PathBuf::from("/etc/synapse/rules.pub"),
+            self_check_files: [
+                "/usr/bin/synapse-sensord",
+                "/usr/bin/synapse-engined",
+                "/usr/bin/synapse-responderd",
+                "/usr/bin/synapse-ai",
+                "/usr/bin/synapse-notify",
+                "/usr/bin/synapsectl",
+                "/usr/lib/synapse/synapse-ebpf.o",
+            ]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
         }
     }
 }
@@ -494,6 +514,10 @@ impl Config {
         }
         check_abs(&mut p, "sensors.ebpf_object", &self.sensors.ebpf_object);
         check_abs(&mut p, "engine.rules_dir", &self.engine.rules_dir);
+        check_abs(&mut p, "engine.rules_pubkey", &self.engine.rules_pubkey);
+        for f in &self.engine.self_check_files {
+            check_abs(&mut p, "engine.self_check_files", f);
+        }
         check_abs(&mut p, "paths.state_dir", &self.paths.state_dir);
         check_abs(&mut p, "paths.log_dir", &self.paths.log_dir);
         check_abs(&mut p, "paths.run_dir", &self.paths.run_dir);

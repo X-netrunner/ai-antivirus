@@ -29,6 +29,10 @@ scan_max_mb = 32               # 1..=4096; larger files are scanned only by `syn
 yara_timeout_ms = 2000         # 50..=60000; per scan
 scan_on_write = true           # scan written files that are executable or in /tmp, /dev/shm, /var/tmp, ~/Downloads
 max_scans_per_sec = 50         # 1..=10000; automatic scans beyond this are skipped and counted
+require_signed_rules = false   # true: refuse rules that are not covered by a valid bundle.sig (synapsectl keygen, rules-sign)
+rules_pubkey = '/etc/synapse/rules.pub'
+# Synapse's own files, checked against pacman's records every 5 minutes (only those a package owns).
+self_check_files = ['/usr/bin/synapse-sensord', '/usr/bin/synapse-engined', '/usr/bin/synapse-responderd', '/usr/bin/synapse-ai', '/usr/bin/synapse-notify', '/usr/bin/synapsectl', '/usr/lib/synapse/synapse-ebpf.o']
 
 [ai]
 enabled = false

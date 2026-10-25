@@ -12,6 +12,7 @@ pub mod ai;
 pub mod engine;
 pub mod files;
 pub mod procs;
+pub mod selfguard;
 
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
@@ -65,12 +66,16 @@ fn reload_rules_if_changed(
     cfg: &Config,
     engine: &mut Engine,
     seen: &mut Vec<(PathBuf, u64, std::time::SystemTime)>,
-) {
+) -> Option<Alert> {
     let now = rules_fingerprint(&cfg.engine.rules_dir);
     if now == *seen {
-        return;
+        return None;
     }
     *seen = now;
+    if let Err(e) = selfguard::verify_rules(cfg, &cfg.engine.rules_dir) {
+        warn!(error = %e, "changed rules are not validly signed; the running rules stay");
+        return Some(selfguard::bundle_invalid(now_ns(), &e));
+    }
     match RuleSet::load_dir(&cfg.engine.rules_dir.join("behavior")) {
         Ok(set) => {
             info!(behavior_rules = set.rules.len(), "behavior rules reloaded");
@@ -78,6 +83,7 @@ fn reload_rules_if_changed(
         }
         Err(e) => warn!(error = %e, "changed rules are invalid; the running rules stay"),
     }
+    None
 }
 
 /// Load the behavior rules and YARA rules under `rules_dir` and build an engine. Broken rules are an error: an engine that
@@ -137,6 +143,9 @@ fn parse(line: &[u8]) -> Option<Envelope> {
 
 /// The daemon: warm up from the current log, then follow it until `shutdown`.
 pub fn run(cfg: &Config, shutdown: &AtomicBool) -> Result<(), String> {
+    selfguard::verify_rules(cfg, &cfg.engine.rules_dir).map_err(|e| {
+        format!("engine.require_signed_rules is on and the rules do not verify: {e}")
+    })?;
     let mut engine = build(cfg, &cfg.engine.rules_dir)?;
     let mut store = Store::open(&cfg.db_path()).map_err(|e| e.to_string())?;
     let log = eventlog::log_path(&cfg.paths.log_dir);
@@ -165,6 +174,9 @@ pub fn run(cfg: &Config, shutdown: &AtomicBool) -> Result<(), String> {
     let (mut last_sweep, mut last_stats, mut last_ai) =
         (Instant::now(), Instant::now(), Instant::now());
     let mut rules_seen = rules_fingerprint(&cfg.engine.rules_dir);
+    let (mut last_ptrace, mut last_self_check) = (Instant::now(), Instant::now());
+    let mut ptrace_reported = false;
+    let mut sensor_watch = selfguard::SensorWatch::new();
     let mut heartbeat = Heartbeat::from_env();
     heartbeat.ready("following the event log");
     let mut bad_lines = 0u64;
@@ -179,6 +191,9 @@ pub fn run(cfg: &Config, shutdown: &AtomicBool) -> Result<(), String> {
         };
         if lines.is_empty() {
             thread::sleep(POLL);
+        }
+        if !lines.is_empty() {
+            sensor_watch.saw_line();
         }
         for l in &lines {
             let Some(env) = parse(l) else {
@@ -211,7 +226,34 @@ pub fn run(cfg: &Config, shutdown: &AtomicBool) -> Result<(), String> {
                     );
                 }
             }
-            reload_rules_if_changed(cfg, &mut engine, &mut rules_seen);
+            if let Some(a) = reload_rules_if_changed(cfg, &mut engine, &mut rules_seen) {
+                warn!(rule = %a.rule_id, "ALERT");
+                store_alert(&store, &a);
+            }
+        }
+        if last_ptrace.elapsed() >= selfguard::PTRACE_CHECK_EVERY {
+            last_ptrace = Instant::now();
+            if let Some(a) = selfguard::check_debugger(now_ns()) {
+                if !ptrace_reported {
+                    warn!(rule = %a.rule_id, "ALERT");
+                    store_alert(&store, &a);
+                }
+                ptrace_reported = true;
+            } else {
+                ptrace_reported = false;
+            }
+            if let Some(a) = sensor_watch.check(now_ns()) {
+                warn!(rule = %a.rule_id, "ALERT");
+                store_alert(&store, &a);
+            }
+        }
+        if last_self_check.elapsed() >= selfguard::SELF_CHECK_EVERY {
+            last_self_check = Instant::now();
+            let pacman = synapse_rules::mtree::pacman_active();
+            for a in engine.self_check(&mut store, &cfg.engine.self_check_files, pacman, now_ns()) {
+                warn!(rule = %a.rule_id, title = %a.title, "ALERT");
+                store_alert(&store, &a);
+            }
         }
         if last_stats.elapsed() >= STATS_EVERY {
             let (e, f) = (engine.stats, engine.files.stats);

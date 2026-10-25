@@ -8,6 +8,7 @@ pub mod matcher;
 pub mod mtree;
 pub mod rule;
 pub mod scan;
+pub mod signing;
 pub mod window;
 
 use std::path::{Path, PathBuf};

@@ -11,6 +11,7 @@ mod advice;
 mod detect;
 mod render;
 mod respond;
+mod sign;
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -200,6 +201,28 @@ enum Command {
         /// Rules directory instead of `engine.rules_dir`.
         #[arg(long)]
         rules: Option<PathBuf>,
+        /// Signing key: the bundle is signed again after installing (needed when engine.require_signed_rules is on).
+        #[arg(long)]
+        key: Option<PathBuf>,
+    },
+    /// Create the rule-signing key pair (rules-signing.key mode 0600, rules.pub) in DIR.
+    Keygen {
+        #[arg(long)]
+        dir: PathBuf,
+    },
+    /// Sign the rules directory (writes bundle.manifest and bundle.sig).
+    RulesSign {
+        #[arg(long)]
+        key: PathBuf,
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// Check that the rules directory is exactly what was signed. Exit 2 when it is not.
+    RulesVerify {
+        #[arg(long)]
+        pubkey: Option<PathBuf>,
+        #[arg(long)]
+        dir: Option<PathBuf>,
     },
     /// Reject a pending rule proposal.
     RejectRule {
@@ -282,9 +305,23 @@ fn main() -> ExitCode {
         Command::ProposalShow { id, db } => {
             Some(advice::proposal_show(&cli.config, db.as_deref(), *id).map(|()| false))
         }
-        Command::ApproveRule { id, db, rules } => Some(
-            advice::approve_rule(&cli.config, db.as_deref(), *id, rules.as_deref()).map(|()| false),
+        Command::ApproveRule { id, db, rules, key } => Some(
+            advice::approve_rule(
+                &cli.config,
+                db.as_deref(),
+                *id,
+                rules.as_deref(),
+                key.as_deref(),
+            )
+            .map(|()| false),
         ),
+        Command::Keygen { dir } => Some(sign::keygen(dir).map(|()| false)),
+        Command::RulesSign { key, dir } => {
+            Some(sign::rules_sign(&cli.config, dir.as_deref(), key).map(|()| false))
+        }
+        Command::RulesVerify { pubkey, dir } => {
+            Some(sign::rules_verify(&cli.config, dir.as_deref(), pubkey.as_deref()).map(|()| false))
+        }
         Command::RejectRule { id, reason, db } => Some(
             advice::reject_rule(&cli.config, db.as_deref(), *id, reason.as_deref()).map(|()| false),
         ),
@@ -388,6 +425,9 @@ fn run(cli: &Cli) -> Result<(), Error> {
         | Command::ProposalShow { .. }
         | Command::ApproveRule { .. }
         | Command::RejectRule { .. }
+        | Command::Keygen { .. }
+        | Command::RulesSign { .. }
+        | Command::RulesVerify { .. }
         | Command::Approve { .. }
         | Command::Reject { .. }
         | Command::Undo { .. }

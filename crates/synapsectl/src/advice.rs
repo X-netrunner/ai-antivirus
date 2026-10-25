@@ -115,8 +115,17 @@ pub fn proposal_show(cfg: &Path, db: Option<&Path>, id: i64) -> Res {
 }
 
 /// Install the rule in `<rules_dir>/behavior/local/ai-<id>.toml` after the whole set still validates, then mark it approved.
-pub fn approve_rule(cfg_path: &Path, db: Option<&Path>, id: i64, rules_dir: Option<&Path>) -> Res {
+pub fn approve_rule(
+    cfg_path: &Path,
+    db: Option<&Path>,
+    id: i64,
+    rules_dir: Option<&Path>,
+    key: Option<&Path>,
+) -> Res {
     let cfg = Config::load(cfg_path).map_err(s)?;
+    if cfg.engine.require_signed_rules && key.is_none() {
+        return Err("engine.require_signed_rules is on: pass --key FILE so the bundle can be signed again (nothing was changed)".into());
+    }
     let store = open_db(cfg_path, db)?;
     let p = store
         .get_proposal(id)
@@ -159,6 +168,14 @@ pub fn approve_rule(cfg_path: &Path, db: Option<&Path>, id: i64, rules_dir: Opti
         return Err(format!(
             "the rule set would not validate with this rule, so it was not installed: {e}"
         ));
+    }
+    if let Some(k) = key {
+        if let Err(e) = synapse_rules::signing::sign(&dir, k) {
+            let _ = fs::remove_file(&path);
+            return Err(format!(
+                "could not sign the rules, so the rule was not installed: {e}"
+            ));
+        }
     }
     store
         .decide_proposal(id, ProposalStatus::Approved, "root", None, now_ns())
@@ -245,12 +262,15 @@ mod tests {
             .unwrap();
         drop(store);
 
-        approve_rule(&cfg, Some(&db), a, None).unwrap();
+        approve_rule(&cfg, Some(&db), a, None, None).unwrap();
         let installed = RuleSet::load_dir(&rules.join("behavior")).unwrap();
         assert_eq!(installed.rules.len(), 1);
         assert_eq!(installed.rules[0].id, format!("LOCAL-ai-{a}"));
-        assert!(approve_rule(&cfg, Some(&db), a, None).is_err(), "not twice");
-        approve_rule(&cfg, Some(&db), b, None).unwrap();
+        assert!(
+            approve_rule(&cfg, Some(&db), a, None, None).is_err(),
+            "not twice"
+        );
+        approve_rule(&cfg, Some(&db), b, None, None).unwrap();
         assert_eq!(
             RuleSet::load_dir(&rules.join("behavior"))
                 .unwrap()
@@ -259,7 +279,7 @@ mod tests {
             2
         );
         assert!(
-            approve_rule(&cfg, Some(&db), c, None).is_err(),
+            approve_rule(&cfg, Some(&db), c, None, None).is_err(),
             "an auto-rejected proposal cannot be approved"
         );
 
@@ -287,6 +307,45 @@ mod tests {
     }
 
     #[test]
+    fn with_signatures_required_approval_needs_the_key_and_signs_again() {
+        let (d, cfg, db, rules) = setup();
+        let (key, public) = synapse_rules::signing::write_keypair(d.path()).unwrap();
+        // the config names the public key and requires signatures
+        fs::write(&cfg, format!("[engine]\nrules_dir = '{}'\nrequire_signed_rules = true\nrules_pubkey = '{}'\n[paths]\nstate_dir = '{}'\n", rules.display(), public.display(), d.path().display())).unwrap();
+        fs::write(rules.join("behavior/base.toml"), "").unwrap();
+        synapse_rules::signing::sign(&rules, &key).unwrap();
+        let store = Store::open(&db).unwrap();
+        let rule: serde_json::Value = serde_json::from_str(RULE).unwrap();
+        let id = store
+            .insert_proposal(1, "ai", None, &rule, ProposalStatus::Pending, None)
+            .unwrap();
+        // without a key nothing happens
+        assert!(approve_rule(&cfg, Some(&db), id, None, None).is_err());
+        assert!(!rules.join("behavior/local").exists());
+        assert_eq!(
+            store.get_proposal(id).unwrap().unwrap().status,
+            ProposalStatus::Pending
+        );
+        // with the key the rule is installed and the bundle still verifies
+        approve_rule(&cfg, Some(&db), id, None, Some(&key)).unwrap();
+        assert!(synapse_rules::signing::verify(&rules, &public).is_ok());
+        // a bad key file: the rule is not left installed
+        let id2 = store
+            .insert_proposal(2, "ai", None, &rule, ProposalStatus::Pending, None)
+            .unwrap();
+        assert!(approve_rule(
+            &cfg,
+            Some(&db),
+            id2,
+            None,
+            Some(&d.path().join("missing.key"))
+        )
+        .is_err());
+        assert!(!approved_rule_path(&rules, id2).exists());
+        assert!(synapse_rules::signing::verify(&rules, &public).is_ok());
+    }
+
+    #[test]
     fn a_broken_existing_rule_set_blocks_approval() {
         let (_d, cfg, db, rules) = setup();
         fs::write(rules.join("behavior/broken.toml"), "[[rule]]\nid = 'nope'").unwrap();
@@ -295,7 +354,7 @@ mod tests {
         let id = store
             .insert_proposal(1, "ai", None, &rule, ProposalStatus::Pending, None)
             .unwrap();
-        assert!(approve_rule(&cfg, Some(&db), id, None).is_err());
+        assert!(approve_rule(&cfg, Some(&db), id, None, None).is_err());
         assert_eq!(
             store.get_proposal(id).unwrap().unwrap().status,
             ProposalStatus::Pending

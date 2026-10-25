@@ -365,6 +365,49 @@ fn ransomware_burst_fires_once_and_a_node_modules_install_does_not() {
 }
 
 #[test]
+fn writes_to_synapses_own_files_are_alerts_unless_pacman_or_the_cli_wrote_them() {
+    let mut r = Rig::new();
+    r.exec(S, 900, 1, "/usr/bin/python3", &["python3", "x.py"], &[]);
+    r.exec(
+        S,
+        901,
+        1,
+        "/usr/bin/synapsectl",
+        &["synapsectl", "approve-rule", "3"],
+        &[],
+    );
+    for p in [
+        "/usr/lib/synapse/synapse-ebpf.o",
+        "/etc/synapse/synapse.toml",
+        "/var/lib/synapse/rules/behavior/00-shipped.toml",
+        "/usr/bin/synapse-sensord",
+    ] {
+        assert_eq!(ids(&r.write(2 * S, 900, p, None)), ["SYN-B-0020"], "{p}");
+    }
+    assert!(
+        r.write(
+            3 * S,
+            901,
+            "/var/lib/synapse/rules/behavior/local/ai-3.toml",
+            None
+        )
+        .is_empty(),
+        "the CLI"
+    );
+    assert!(
+        r.write(3 * S, 900, "/var/lib/synapse/synapse.db", None)
+            .is_empty(),
+        "state files are not rules"
+    );
+    r.engine.set_pacman_probe(|| true);
+    assert!(
+        r.write(4 * S, 900, "/usr/lib/synapse/synapse-ebpf.o", None)
+            .is_empty(),
+        "during an upgrade"
+    );
+}
+
+#[test]
 fn mining_pool_port() {
     let mut r = Rig::new();
     r.exec(S, 600, 1, "/home/u/.x/xm", &["xm"], &[]);

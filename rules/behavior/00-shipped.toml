@@ -106,3 +106,14 @@ severity = 'high'
 confidence = 0.7
 match = { event = 'exec', exe_suffix = [' (deleted)'] }
 action = 'freeze'
+
+[[rule]]
+id = 'SYN-B-0020'
+title = "Synapse's own files written outside a pacman transaction"
+severity = 'critical'
+confidence = 0.8
+# Synapse's programs, its configuration, its units and the rules. Its own daemons write their state under /var/lib/synapse
+# (not covered here); the CLI writes rules when you approve one.
+exclude_exe = ['/usr/bin/pacman', '/usr/bin/synapsectl', '/usr/bin/systemctl', '/usr/lib/systemd/systemd']
+match = { event = 'file_write', path_prefix = ['/usr/lib/synapse/', '/etc/synapse/', '/var/lib/synapse/rules/', '/usr/bin/synapse', '/usr/lib/systemd/system/synapse-', '/etc/systemd/system/synapse-'], outside_pacman = true }
+action = 'notify'
