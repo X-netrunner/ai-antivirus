@@ -271,6 +271,7 @@ impl Engine {
             f.exe = Some(p.exe.as_path());
             f.parent_exe = self.procs.exe(p.parent);
         }
+        f.ancestors = self.procs.ancestors(key);
         f.pacman_active = pacman;
         f
     }
@@ -308,6 +309,7 @@ impl Engine {
                 .map(OsString::as_os_str)
                 .filter(|s| !s.is_empty());
             f.stdin_writer_exe = self.procs.stdin_writer_exe(key);
+            f.ancestors = self.procs.ancestors(key);
             f.pacman_active = pacman;
             let matched: Vec<usize> = self
                 .matched(&f)

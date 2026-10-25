@@ -125,6 +125,40 @@ fn reverse_shell_fires_and_an_ssh_command_does_not() {
 }
 
 #[test]
+fn pacman_hooks_with_a_socket_stdin_are_not_reverse_shells() {
+    // pacman runs hooks and scriptlets with stdin on a socket; seen in the test VM during `pacman -S`
+    let mut r = Rig::new();
+    r.exec(
+        S,
+        800,
+        1,
+        "/usr/bin/pacman",
+        &["pacman", "-S", "htop"],
+        &["/dev/pts/0"],
+    );
+    let a = r.exec(
+        2 * S,
+        801,
+        800,
+        "/usr/bin/bash",
+        &["/usr/share/libalpm/scripts/gtk-update-icon-cache"],
+        &["socket:[9]"],
+    );
+    assert!(a.is_empty(), "{a:?}");
+    // and a subshell of the hook (grandchild of pacman)
+    assert!(r
+        .exec(
+            3 * S,
+            802,
+            801,
+            "/usr/bin/bash",
+            &["bash", "-c", "x"],
+            &["socket:[9]"]
+        )
+        .is_empty());
+}
+
+#[test]
 fn curl_into_sh_fires_whichever_starts_first_and_cat_into_sh_does_not() {
     let mut r = Rig::new();
     r.exec(S, 200, 1, "/usr/bin/fish", &["fish"], &[]);

@@ -162,6 +162,22 @@ impl ProcTable {
         cur
     }
 
+    /// Executables above `key` (parent first), as far as the table knows them; at most 32 levels.
+    pub fn ancestors(&self, key: ProcKey) -> Vec<&Path> {
+        let mut out = Vec::new();
+        let mut cur = key;
+        for _ in 0..32 {
+            let Some(p) = self.get(cur) else { break };
+            if p.parent.pid == 0 || p.parent == cur {
+                break;
+            }
+            let Some(pp) = self.get(p.parent) else { break };
+            out.push(pp.exe.as_path());
+            cur = p.parent;
+        }
+        out
+    }
+
     /// Forget processes that exited more than two minutes before `now_ns`, and old pipe ends.
     pub fn sweep(&mut self, now_ns: u64) {
         let gone: Vec<ProcKey> = self

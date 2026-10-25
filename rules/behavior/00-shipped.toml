@@ -8,6 +8,8 @@ id = 'SYN-B-0001'
 title = 'Shell with a socket as stdin (reverse shell)'
 severity = 'high'
 confidence = 0.9
+# pacman runs its hooks and install scriptlets with stdin on a socket.
+exclude_ancestor_exe = ['/usr/bin/pacman']
 match = { event = 'exec', exe_in = ['/usr/bin/bash', '/usr/bin/sh', '/usr/bin/dash', '/usr/bin/zsh', '/usr/bin/fish', '/usr/bin/ksh', '/usr/bin/mksh', '/usr/bin/busybox'], stdin_is_socket = true }
 action = 'freeze'
 

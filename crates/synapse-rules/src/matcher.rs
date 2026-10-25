@@ -10,7 +10,7 @@ use std::path::Path;
 use crate::rule::{EventKind, Match, Rule};
 
 /// What is known about one event. `None` = not known (an unknown fact never satisfies a condition on it).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Facts<'a> {
     pub kind: EventKind,
     /// The acting process's executable.
@@ -30,6 +30,8 @@ pub struct Facts<'a> {
     /// `connect` / `listen`: the port.
     pub port: Option<u16>,
     pub pacman_active: bool,
+    /// Executables of the acting process's ancestors, nearest first (as far as they are known).
+    pub ancestors: Vec<&'a Path>,
 }
 
 impl<'a> Facts<'a> {
@@ -46,6 +48,7 @@ impl<'a> Facts<'a> {
             setuid_root: None,
             port: None,
             pacman_active: false,
+            ancestors: Vec::new(),
         }
     }
 }
@@ -186,6 +189,12 @@ impl Rule {
     pub fn matches(&self, f: &Facts<'_>) -> bool {
         if f.exe
             .is_some_and(|e| self.exclude_exe.iter().any(|x| x == e))
+        {
+            return false;
+        }
+        if f.ancestors
+            .iter()
+            .any(|a| self.exclude_ancestor_exe.iter().any(|x| x == a))
         {
             return false;
         }

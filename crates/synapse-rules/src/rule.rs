@@ -50,6 +50,10 @@ pub struct Rule {
     /// Acting executables this rule never fires for (exact paths).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude_exe: Vec<PathBuf>,
+    /// The rule never fires when one of these runs anywhere above the acting process (its parent, grandparent ...):
+    /// `['/usr/bin/pacman']` leaves pacman's hooks and install scriptlets alone (spec 8: pacman and its children).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_ancestor_exe: Vec<PathBuf>,
     /// What the responder would do. In M3 nothing executes: the action is recorded on the alert.
     pub action: Action,
 }
@@ -261,7 +265,7 @@ impl Rule {
         }
 
         // lists: not too long, no empty strings
-        let lists: [(&str, usize, bool); 11] = [
+        let lists: [(&str, usize, bool); 12] = [
             (
                 "path_not_prefix",
                 m.path_not_prefix.len(),
@@ -317,6 +321,13 @@ impl Rule {
                 self.exclude_exe.len(),
                 self.exclude_exe.iter().any(|p| p.as_os_str().is_empty()),
             ),
+            (
+                "exclude_ancestor_exe",
+                self.exclude_ancestor_exe.len(),
+                self.exclude_ancestor_exe
+                    .iter()
+                    .any(|p| p.as_os_str().is_empty()),
+            ),
         ];
         for (name, len, has_empty) in lists {
             if len > MAX_LIST {
@@ -331,6 +342,7 @@ impl Rule {
             ("parent_exe_in", &m.parent_exe_in),
             ("stdin_from_exe_in", &m.stdin_from_exe_in),
             ("exclude_exe", &self.exclude_exe),
+            ("exclude_ancestor_exe", &self.exclude_ancestor_exe),
         ] {
             if paths.iter().any(|p| !p.is_absolute()) {
                 bad(format!("{name} entries must be absolute paths"));

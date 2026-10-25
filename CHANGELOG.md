@@ -2,7 +2,23 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow milestones until 1.0.
 
-## [0.3.0] - M2: eBPF sensor, process tree (unreleased, not yet compiled or loaded on a kernel)
+## [0.4.0] - M3: rule engine, YARA-X, hash table, pacman trust (unreleased)
+
+### Added
+- `synapse-engined`: follows `events.jsonl`, keeps a process table (warmed up from the log at start, pipe ends paired), runs L0 pacman trust, L1 hash table, L2 YARA-X and L3 behavior rules, stores alerts; `--replay FILE` prints alerts for a recorded log. `packaging/systemd/synapse-engined.service` (user `synapse`, no capabilities, no network).
+- `synapse-rules`: strict TOML behavior-rule schema (all problems reported at once), matcher, sliding threshold windows per process or process tree, YARA-X loading and scanning with a timeout, SHA-256, pacman `desc`/`files`/`mtree` reader.
+- Shipped rules: 11 behavior rules (`rules/behavior/00-shipped.toml`) and YARA rules (EICAR, reverse-shell one-liners, XMRig, ld.so.preload rootkits).
+- `synapsectl alerts`, `scan`, `rules`, `trust-baseline`, `integrity`, `hash-add`.
+- Store: alert reads, hash table and trust-cache operations.
+- Events: `exec.stdio` and `file_write.head_entropy` (optional fields; older logs still parse). `entropy` module.
+- Config: `engine.rules_dir`, `scan_max_mb`, `yara_timeout_ms`, `scan_on_write`, `max_scans_per_sec`.
+- `tmpfiles.d`: root-owned `/var/lib/synapse/rules`.
+
+### Fixed
+- M2: a test did not compile (temporary dropped while borrowed). M2 is now built and verified on kernel 7.2 (all programs attach).
+- Found in the test VM: pacman hooks run with a socket on stdin and matched the reverse-shell rule; rules gain `exclude_ancestor_exe`.
+
+## [0.3.0] - M2: eBPF sensor, process tree (unreleased)
 
 ### Added
 - `crates/synapse-ebpf` (kernel side, nightly, `bpfel-unknown-none`): programs for `sched_process_fork`, `sched_process_exec`, `sched_process_exit`, `sys_enter_execve{,at}` (argument capture), `sys_enter_exit_group` (exit status) and kprobes on `inet_stream_connect` / `inet_dgram_connect` (TCP/UDP connect). 8 MiB ring buffer, per-CPU drop counter.

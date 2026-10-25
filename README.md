@@ -2,7 +2,7 @@
 
 AI-assisted EDR and antivirus for Arch Linux. Design: see the Synapse master prompt and design specification (v1.0). This repository is built one milestone at a time.
 
-**Status: M2 written, not yet compiled** (M0 is built and passes all 44 tests on Arch; M1 was written without a compiler and then fixed by you, see the archive name `m1-fix1`; M2 has never been compiled and no eBPF program has ever been loaded into a kernel). M2 adds the eBPF sensor (exec with arguments, exit with status, fork edges, TCP/UDP connect), the process tree and kernel drop counting. Default mode is `alert-only`; nothing here can act on the system: the sensor only observes and writes a log.
+**Status: M3 built and tested** (Arch, kernel 7.2). M2 compiles and its eBPF programs load and attach on a real kernel (test VM: `partial=false`, `dropped=0`). M3 adds the engine daemon: pacman trust, a hash table, YARA-X and TOML behavior rules, with `synapsectl` commands to read alerts and scan on demand. Default mode is `alert-only`, and nothing can act on the system yet: rules record what the responder (M4) would do.
 
 ## Requirements
 
@@ -111,11 +111,15 @@ crates/synapse-sys/      unsafe code in userspace: fanotify and poll FFI (own li
 crates/synapse-ebpf-common/  no_std record layouts shared by kernel and sensor
 crates/synapse-ebpf/     kernel-side eBPF programs (nightly, excluded from the workspace)
 crates/synapse-sensord/  sensor daemon: eBPF + process table, /proc poller fallback, fanotify
+crates/synapse-rules/    behavior-rule schema and matcher, threshold windows, YARA-X glue, pacman mtree reader (M3)
+crates/synapse-engined/  engine daemon: process table, L0-L3 pipeline, alerts, --replay (M3)
 crates/synapsectl/       CLI
+rules/behavior/          shipped behavior rules (TOML)
+rules/yara/              shipped YARA rules
 xtask/                   `cargo xtask build-ebpf`
 config/                  synapse.example.toml (a test keeps it equal to the defaults)
 packaging/arch/          sysusers.d and tmpfiles.d snippets
-packaging/systemd/       synapse-sensord.service
+packaging/systemd/       synapse-sensord.service, synapse-engined.service
 ```
 
 M2 sensor design:
@@ -132,6 +136,53 @@ M1 sensor design (still how the fallback and fanotify work):
 - The poller scans `/proc` every `sensors.poll_interval_ms` and reports `exec` for new processes and `exit` for vanished ones. Processes present at startup are recorded silently.
 - fanotify watches `FAN_CLOSE_WRITE` on the whole filesystem of each path in `sensors.fanotify_marks` and reports `file_write` (path, size, writing process). Events from the sensor's own PID are never reported. Repeated writes to the same path by the same process within one second are merged (counted in memory, not logged).
 - If fanotify is unavailable or no filesystem can be marked, the daemon keeps running on polling alone and reports `degraded=true`.
+
+## M3: the engine
+
+```sh
+sudo install -d /var/lib/synapse/rules && sudo cp -r rules/behavior rules/yara /var/lib/synapse/rules/   # root-owned
+sudo -u synapse synapsectl trust-baseline       # what pacman installed -> trust cache (~1 s for 250k files)
+sudo -u synapse synapse-engined                  # or: systemctl enable --now synapse-engined
+synapsectl alerts [-n 50] [--json]               # newest alerts
+synapsectl rules [--dir rules]                   # validate and list the rules
+sudo synapsectl scan [-q] PATH...                # on demand: trust, hashes, YARA; exit 1 = something found
+sudo synapsectl integrity [--package NAME]       # every pacman file vs. its recorded SHA-256; exit 1 = differences
+synapsectl hash-add FILE|SHA256 [--good] [--label TEXT]
+synapse-engined --replay events.jsonl --rules rules   # run a recorded log through the engine, alerts as JSON lines
+```
+
+How an event is handled, cheapest first (spec 7):
+
+- **Process table** from `exec`/`exit` (warmed up from the existing log at start, so running processes are known). It also pairs pipe ends, so `curl ... | sh` is recognized whichever process the kernel reports first.
+- **L0 trust.** A file pacman installed whose SHA-256 matches the package's `mtree` is trusted and not YARA-scanned. A mismatch is re-checked against the package's *current* mtree first (an upgrade the cache has not caught up with is not an alert), then reported as `SYN-I-0001`. Files a package marks as editable configuration (`%BACKUP%`, e.g. `/etc/pacman.conf`) are not trust material.
+- **L1 hash table** (`hashes`): known bad = `SYN-H-0001`, known good ends the check.
+- **L2 YARA-X** on every program that runs and on written files that are executable or in `/tmp`, `/dev/shm`, `/var/tmp`, `~/Downloads`. Results are cached per (inode, size, mtime, ctime); automatic scans are capped at `engine.max_scans_per_sec`.
+- **L3 behavior rules** (`rules/behavior/*.toml`). Threshold rules count in a sliding window per process or per process tree (up to the nearest shell, terminal or session program).
+- Alerts go to SQLite (`alerts`); the same rule for the same process and path alerts at most once in 5 minutes.
+
+### Behavior rules
+
+```toml
+[[rule]]
+id = 'SYN-B-0001'                 # SYN-B-NNNN shipped, LOCAL-<name> yours
+title = 'Shell with a socket as stdin (reverse shell)'
+severity = 'high'                 # low | medium | high | critical
+confidence = 0.9                  # 0..1
+exclude_exe = []                  # acting programs this rule ignores
+exclude_ancestor_exe = ['/usr/bin/pacman']   # ... or anything running under them
+match = { event = 'exec', exe_in = ['/usr/bin/bash'], stdin_is_socket = true }
+action = 'freeze'                 # log | notify | freeze | kill | quarantine | block | restore (recorded only until M4)
+```
+
+`match` keys: `event` (required: `exec`, `exit`, `connect`, `listen`, `file_write`, ...), `exe_in`, `exe_prefix`, `exe_suffix`, `parent_exe_in`; exec only: `argv_contains`, `stdin_is_socket`, `stdout_is_socket`, `stdin_from_exe_in`; file events: `path_in`, `path_prefix`, `path_not_prefix`, `path_suffix` (`~/x` = in every home), `setuid_file`; network: `port_in`; any: `outside_pacman`. Threshold rules add `scope` (`process` | `process_tree`), `window_secs` and `threshold = { events, distinct_files_written, high_entropy_ratio }`. Unknown keys, keys that do not fit the event kind, relative paths and duplicate ids are errors, all reported at once; the engine refuses to start with broken rules.
+
+Shipped: SYN-B-0001 reverse shell, 0002 download piped into a shell, 0003 exec from memfd, 0004 `/etc/ld.so.preload`, 0005 services/timers/autostart/cron written outside pacman, 0006 `authorized_keys` by a non-editor, 0008 new setuid-root file, 0010 ransomware-like burst, 0012 mining-pool port, 0013 exec from a temp folder, 0014 exec of a deleted file. YARA: EICAR, reverse-shell one-liners, XMRig, ld.so.preload rootkits.
+
+### M3 verification
+
+- `cargo test --workspace` (unit tests plus `crates/synapse-engined/tests/pipeline.rs`: each rule fires on its pattern and stays quiet on look-alikes such as `ssh host cmd`, `cat x | sh`, npm installs, Steam, editors, `systemctl edit`, pacman hooks), `cargo clippy --workspace --all-targets -- -D warnings`.
+- Test VM (Arch, kernel 7.2.11, sensor + engine running): `pacman -S`/`-R` of several packages including ones with hooks, `makepkg`, `git clone`, `curl`, tar round trips -> **no alerts**; EICAR written to `/tmp` -> one `YARA:eicar.eicar_test_file` alert. The first run found a false positive (pacman runs hooks with a socket on stdin, which matched SYN-B-0001); `exclude_ancestor_exe` fixes it and a test keeps it fixed.
+- This machine (read-only): `trust-baseline` 1257 packages / 249k files in ~1 s; `integrity` over all of them in 39 s: everything matches except `/usr/lib/vlc/plugins/plugins.dat`, a cache a pacman hook rebuilds.
 
 ## Decisions and additions beyond the spec
 
@@ -158,9 +209,25 @@ M1 sensor design (still how the fallback and fanotify work):
 - `/proc/<pid>/stat` times use `USER_HZ = 100` as a constant (true on all Linux architectures) to avoid an `unsafe` `sysconf` call.
 - Retention prunes `events` only. Alerts, verdicts and actions are kept; an alert's event link becomes NULL when its event is pruned.
 
+- **M3: the engine reads the JSONL event log** instead of a socket from the sensor (spec 4 sketches Unix-socket IPC). The log is already the sensor's durable output, either daemon can restart alone, and replay comes for free. A socket can replace it once the responder needs low latency (M4).
+- **M3: pacman's database is read directly** (`desc`, `files`, `mtree`), not through libalpm: the `alpm` crate must match the installed libalpm exactly, so a rolling pacman upgrade could break Synapse at the worst moment.
+- **M3: the sensor enriches two events** (backward compatible, older logs still parse): `exec.stdio` (where fds 0-2 point) and `file_write.head_entropy` (entropy of the first 4 KiB, read through fanotify's own descriptor). The engine is unprivileged and could not get either itself.
+- **M3: rule ids SYN-B-0013 and 0014 are new**; the spec folds exec-from-tmp into 0002 and deleted binaries into 0003. Splitting them keeps each `match` table a single AND.
+- **M3: std threads, no tokio.** The engine is one loop over the log; there is no async IPC yet.
+
 ## Not done yet
 
-M3 to M8 in full. In particular: no daemons besides the sensor, no IPC, no rules, no responder, no AI analyzer.
+M4 to M8 in full: no responder (nothing is frozen, killed or quarantined), no AI analyzer, no self-protection, no PKGBUILD or pacman hooks.
+
+M3 specifics:
+
+- **Simulators (spec 14) are not in the repo.** The rules are covered by the pipeline tests with recorded-style events and by the live VM run above, but there is no script that triggers each rule on a real system yet.
+- Rules not built because the sensor does not report what they need: SYN-B-0007 (file reads: fanotify open events), SYN-B-0009 (module loads), SYN-B-0011 (ptrace). SYN-B-0012 has only its port half (no CPU statistics).
+- No `FAN_OPEN_EXEC_PERM`: scanning is after the fact (detect, not block).
+- The engine (user `synapse`, no capabilities) cannot read files in `0700` home directories, so YARA on `~/Downloads` only works for readable files. Run `sudo synapsectl scan` for those.
+- The trust cache is only refreshed per package when a file looks changed; the pacman hooks that refresh it after every transaction come in M7. `synapsectl trust-baseline` does it by hand.
+- No rule-bundle signing (M6); the rules directory is protected by being root-owned.
+- `synapsectl status`, rule reload without restart, alert acknowledgement: not done.
 
 M2 specifics:
 
@@ -179,11 +246,12 @@ M1 specifics:
 
 ## Known risks
 
-- **M2 has never been compiled, and no eBPF program has been loaded by a verifier.** The userspace half (record decoding, process table, translator, tracefs parser) is ordinary Rust with tests that need no kernel; the kernel half is where I expect trouble. Most likely, in order: (1) the verifier rejecting the argument-capture loop in `sys_enter_execve` (it is a separate, optional program on purpose, so exec events still flow without it); (2) the import path `aya_ebpf::helpers::gen::{...}` in `crates/synapse-ebpf/src/main.rs` (one `mod raw`, one line to change); (3) `RingBufEntry` / map method names or `unsafe`-ness in aya-ebpf 0.1; (4) `RingBuf: AsRawFd` and `PerCpuValues::iter` in aya 0.13 (`ebpf.rs`); (5) the kprobe targets on your kernel. Send me the compiler or verifier output and I will fix it.
+- **False positives are the main M3 risk.** Only a short benign run in a VM and this machine's package files have been checked; the spec's two-week soak (M8) has not happened. Known: SYN-B-0003 fires on runc/Docker (memfd re-exec), SYN-B-0013 on installers and AppImages that run from `/tmp`, SYN-B-0010 could fire on a program not in its exclusion list that writes many compressed files quickly into a home directory, `integrity` reports caches that pacman hooks rebuild (`plugins.dat`).
+- YARA-X needs writable-then-executable memory, so the engine unit cannot use `MemoryDenyWriteExecute=`.
+- A malicious process that starts before the engine and never execs again is known only through the warm-up (the last 200k log lines).
 - Thread creation also produces fork records (the kernel gives no way to tell without `task_struct`). They are cheap, but a thread-heavy workload raises the ring-buffer rate; watch `dropped`.
 - A main thread that calls `pthread_exit` while other threads continue is reported as exited early.
 
-- **M1 has never been compiled.** It was written in an environment without a Rust toolchain. Expect a few compile errors, most likely in `synapse-sys` (libc signatures for `fanotify_init`/`fanotify_mark`) and in trait or borrow details elsewhere. M0 is verified (44 tests on Arch).
 - Polling misses processes that start and exit between two scans, and cannot see exit codes (`exit` events carry `code = -1`). `exec` describes the process as found at scan time. M2 fixes all three.
 - A process that wrote a file and exited before the sensor looked it up is reported with `start_ns = 0`.
 - Two rotations between two `tail -f` polls (200 ms) could skip the lines in the middle file. With the default 64 MiB rotation this is not realistic.
