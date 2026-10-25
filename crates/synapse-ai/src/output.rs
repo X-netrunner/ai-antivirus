@@ -65,8 +65,9 @@ pub struct AiOutput {
     pub summary: String,
     #[serde(default)]
     pub indicators: Vec<Indicator>,
+    /// Parsed one by one in `validate_output`, so a rule with an invented key drops only itself.
     #[serde(default)]
-    pub proposed_rules: Vec<Rule>,
+    pub proposed_rules: Vec<serde_json::Value>,
     pub injection_suspected: bool,
 }
 
@@ -180,15 +181,23 @@ pub fn validate_output(o: AiOutput) -> Result<Validated, String> {
     }
 
     let mut rules = Vec::new();
-    for r in o.proposed_rules.into_iter().take(MAX_RULES * 2) {
-        let p = r.problems();
-        if p.is_empty() && rules.len() < MAX_RULES {
-            rules.push(r);
-        } else if !p.is_empty() {
-            problems.push(format!(
+    for v in o.proposed_rules.into_iter().take(MAX_RULES * 2) {
+        match serde_json::from_value::<Rule>(v) {
+            Err(e) => problems.push(format!(
                 "dropped proposed rule: {}",
-                clean_text(&p.join("; "), 300)
-            ));
+                clean_text(&e.to_string(), 300)
+            )),
+            Ok(r) => {
+                let p = r.problems();
+                if !p.is_empty() {
+                    problems.push(format!(
+                        "dropped proposed rule: {}",
+                        clean_text(&p.join("; "), 300)
+                    ));
+                } else if rules.len() < MAX_RULES {
+                    rules.push(r);
+                }
+            }
         }
     }
 
@@ -284,9 +293,16 @@ mod tests {
             "\"action\": \"notify\"",
             "\"action\": \"notify\", \"shell\": \"x\"",
         );
+        // an invented key inside a rule drops that rule only; the verdict and summary are kept
+        let v = validate(&bad_rule).unwrap();
+        assert_eq!(v.verdict, AiVerdict::Suspicious);
+        assert!(v.proposed_rules.is_empty());
         assert!(
-            validate(&bad_rule).is_err(),
-            "unknown keys inside a rule fail the whole answer"
+            v.problems
+                .iter()
+                .any(|p| p.contains("unknown field `shell`")),
+            "{:?}",
+            v.problems
         );
     }
 

@@ -2,6 +2,14 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow milestones until 1.0.
 
+## [0.6.0] - M5: AI analyzer (unreleased)
+
+### Added
+- `synapse-ai`: bundle builder (credential files never read), prompt with random data markers, Ollama client (temperature 0, JSON-schema output, timeout), strict output validator, spool daemon with an hourly budget. `packaging/systemd/synapse-ai.service` (no capabilities, localhost only).
+- Engine: queues alerts for analysis, validates and imports answers, checks proposed rules against a recording of ordinary activity, reloads changed rules without a restart.
+- `synapsectl ai-notes`, `proposals`, `proposal-show`, `approve-rule`, `reject-rule`.
+- Store: schema v3 (`ai_notes`). Config: `ai.max_per_hour`, `ai.min_severity`, `ai.corpus`, `paths.ai_dir`. tmpfiles and sysusers entries for the analyzer's folder.
+
 ## [0.5.0] - M4: responder with dry-run, approval and undo (unreleased)
 
 ### Added
