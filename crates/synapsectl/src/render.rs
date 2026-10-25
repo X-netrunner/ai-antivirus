@@ -4,7 +4,7 @@
 //! lines). Everything printed to a terminal goes through [`sanitize`] so a
 //! hostile name cannot smuggle in escape sequences.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -97,6 +97,14 @@ fn command_line(argv: &[std::ffi::OsString]) -> String {
 }
 
 /// One line describing the event (no timestamp).
+/// ` stdin=socket:[123]` when stdin is a socket or a pipe (what the reverse-shell and download-and-run rules look at), else nothing.
+fn stdin_note(stdio: &[OsString]) -> String {
+    match stdio.first().map(|s| s.to_string_lossy()) {
+        Some(s) if s.starts_with("socket:") || s.starts_with("pipe:") => format!(" stdin={}", sanitize(&s)),
+        _ => String::new(),
+    }
+}
+
 pub fn describe(event: &Event) -> String {
     match event {
         Event::Exec {
@@ -107,12 +115,14 @@ pub fn describe(event: &Event) -> String {
             argv,
             cwd,
             cgroup,
+            stdio,
         } => format!(
-            "exec          {proc} ppid={} uid={uid} exe={} cwd={} cgroup={} cmd={}",
+            "exec          {proc} ppid={} uid={uid} exe={} cwd={} cgroup={}{} cmd={}",
             parent.pid,
             path(exe),
             path(cwd),
             sanitize(cgroup),
+            stdin_note(stdio),
             command_line(argv)
         ),
         Event::Exit { proc, code } => format!("exit          {proc} code={code}"),
@@ -222,10 +232,12 @@ mod tests {
             argv: vec![OsString::from("x"), OsString::from("y".repeat(500))],
             cwd: PathBuf::from("/tmp"),
             cgroup: "/a.slice".to_owned(),
+            stdio: vec![OsString::from("socket:[7]")],
         };
         let line = describe(&event);
         assert!(!line.contains('\x1b'));
         assert!(line.contains("exe=/tmp/evil\\u{1b}[2J"));
+        assert!(line.contains(" stdin=socket:[7] cmd="));
         assert!(line.ends_with("..."));
         assert!(line.len() < 450, "command line was not truncated");
     }

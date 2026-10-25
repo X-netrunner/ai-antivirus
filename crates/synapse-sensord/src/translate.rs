@@ -109,12 +109,14 @@ impl Translator {
         let mut cwd = None;
         let mut cgroup = String::new();
         let mut proc_argv = Vec::new();
+        let mut stdio = Vec::new();
         // A key with start_ns 0 means "unknown": nothing to compare against, so
         // `/proc` is not trusted for it.
         if proc.start_ns != 0 && self.is_live(pid, proc.start_ns) {
             exe = self.fs.exe(pid);
             cwd = self.fs.cwd(pid);
             cgroup = self.fs.cgroup(pid);
+            stdio = self.fs.stdio(pid);
             if view.argv.is_empty() {
                 proc_argv = self.fs.cmdline(pid);
             }
@@ -124,6 +126,7 @@ impl Translator {
                 cwd = None;
                 cgroup.clear();
                 proc_argv.clear();
+                stdio.clear();
             }
         }
 
@@ -140,6 +143,7 @@ impl Translator {
             argv,
             cwd: cwd.unwrap_or_default(),
             cgroup,
+            stdio,
         }
     }
 }
@@ -296,6 +300,7 @@ mod tests {
             argv,
             cwd,
             cgroup,
+            ..
         }] = events.as_slice()
         else {
             panic!("expected one Exec, got {events:?}");

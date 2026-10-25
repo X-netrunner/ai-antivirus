@@ -54,6 +54,10 @@ pub trait ProcFs: Send {
     fn cwd(&self, pid: u32) -> Option<PathBuf>;
     fn cgroup(&self, pid: u32) -> String;
     fn cmdline(&self, pid: u32) -> Vec<OsString>;
+    /// fds 0, 1, 2 (see `Event::Exec::stdio`).
+    fn stdio(&self, _pid: u32) -> Vec<OsString> {
+        Vec::new()
+    }
     /// Every numeric directory in the proc root.
     fn pids(&self) -> io::Result<Vec<u32>>;
 }
@@ -77,6 +81,10 @@ impl RealProcFs {
 impl ProcFs for RealProcFs {
     fn stat(&self, pid: u32) -> Option<StatInfo> {
         procinfo::read_stat(&self.root, pid)
+    }
+
+    fn stdio(&self, pid: u32) -> Vec<OsString> {
+        procinfo::read_stdio(&self.dir(pid))
     }
 
     fn exe(&self, pid: u32) -> Option<PathBuf> {

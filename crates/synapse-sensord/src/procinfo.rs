@@ -98,6 +98,7 @@ pub struct ProcInfo {
     pub argv: Vec<OsString>,
     pub cwd: PathBuf,
     pub cgroup: String,
+    pub stdio: Vec<OsString>,
 }
 
 /// Result of inspecting one PID.
@@ -122,6 +123,17 @@ fn read_cmdline(dir: &Path) -> Vec<OsString> {
     }
 }
 
+/// Where fds 0, 1 and 2 of the process in `dir` point (empty entries for fds that are closed or unreadable).
+pub fn read_stdio(dir: &Path) -> Vec<OsString> {
+    (0..3)
+        .map(|fd| {
+            fs::read_link(dir.join("fd").join(fd.to_string()))
+                .map(PathBuf::into_os_string)
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
 /// Collect the facts for `pid`, whose `stat` was just read as `stat`.
 pub fn probe(root: &Path, pid: u32, stat: &StatInfo) -> Probe {
     // Kernel threads: PID 2 (kthreadd) and its children.
@@ -144,6 +156,7 @@ pub fn probe(root: &Path, pid: u32, stat: &StatInfo) -> Probe {
         Err(_) => PathBuf::new(),
     };
     let cwd = fs::read_link(dir.join("cwd")).unwrap_or_default();
+    let stdio = read_stdio(&dir);
     let cgroup = fs::read(dir.join("cgroup"))
         .map(|b| parse_cgroup(&String::from_utf8_lossy(&b)))
         .unwrap_or_default();
@@ -165,6 +178,7 @@ pub fn probe(root: &Path, pid: u32, stat: &StatInfo) -> Probe {
         argv,
         cwd,
         cgroup,
+        stdio,
     }))
 }
 

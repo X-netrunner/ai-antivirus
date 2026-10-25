@@ -87,6 +87,7 @@ impl Poller {
                         argv: info.argv,
                         cwd: info.cwd,
                         cgroup: info.cgroup,
+                        stdio: info.stdio,
                     });
                     current.insert(pid, (key, true));
                 }

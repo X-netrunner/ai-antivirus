@@ -323,6 +323,10 @@ pub enum Event {
         #[serde(with = "os_serde::path")]
         cwd: PathBuf,
         cgroup: String,
+        /// Where fds 0, 1 and 2 pointed at exec time, as `readlink /proc/<pid>/fd/N` shows them (`socket:[123]`, `pipe:[456]`,
+        /// `/dev/pts/1`); empty entries for unreadable fds, an empty list when not collected. Added in M3; older logs omit it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty", with = "os_serde::string_vec")]
+        stdio: Vec<OsString>,
     },
     Exit {
         proc: ProcKey,
@@ -462,6 +466,15 @@ mod tests {
     }
 
     #[test]
+    fn exec_without_stdio_from_an_m2_log_still_parses() {
+        let line = r#"{"type":"exec","proc":{"pid":5,"start_ns":9},"parent":{"pid":1,"start_ns":1},"uid":0,"exe":"/usr/bin/sh","argv":["sh"],"cwd":"/","cgroup":""}"#;
+        let event: Event = serde_json::from_str(line).unwrap();
+        assert!(matches!(event, Event::Exec { ref stdio, .. } if stdio.is_empty()));
+        // and an empty list is not written out
+        assert!(!serde_json::to_string(&event).unwrap().contains("stdio"));
+    }
+
+    #[test]
     fn non_utf8_paths_and_args_survive() {
         let raw = vec![b'/', b't', b'm', b'p', b'/', 0xff, 0xfe];
         let event = Event::Exec {
@@ -478,6 +491,7 @@ mod tests {
             argv: vec![OsString::from("ok"), OsString::from_vec(vec![0x80])],
             cwd: PathBuf::from("/"),
             cgroup: String::new(),
+            stdio: Vec::new(),
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains(r#"{"hex":"2f746d702ffffe"}"#));

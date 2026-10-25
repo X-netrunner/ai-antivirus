@@ -29,6 +29,11 @@ pub fn all_event_variants() -> Vec<Event> {
             ],
             cwd: PathBuf::from("/home/nex"),
             cgroup: "/user.slice/user-1000.slice".to_owned(),
+            stdio: vec![
+                OsString::from("socket:[4242]"),
+                OsString::from("socket:[4242]"),
+                OsString::from("/dev/pts/1"),
+            ],
         },
         Event::Exit {
             proc: pk(100),
@@ -99,6 +104,7 @@ pub fn sample_envelope(seq: u64, ts_ns: u64) -> Envelope {
             ],
             cwd: PathBuf::from("/tmp"),
             cgroup: "/user.slice".to_owned(),
+            stdio: Vec::new(),
         },
     }
 }
