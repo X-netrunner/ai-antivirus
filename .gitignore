@@ -2,3 +2,8 @@
 *.db
 *.db-wal
 *.db-shm
+
+# makepkg output
+/packaging/arch/pkg/
+/packaging/arch/src/
+*.pkg.tar.zst

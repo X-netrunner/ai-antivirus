@@ -1,0 +1,21 @@
+# Written without being run: expect to adjust it the first time it executes.
+# Builds and tests the user-space workspace in an Arch container. The eBPF object (nightly + bpf-linker) is not built here.
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install toolchain
+        run: pacman -Syu --noconfirm --needed base-devel git rust clang sqlite libarchive util-linux nftables
+      - uses: actions/checkout@v4
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
