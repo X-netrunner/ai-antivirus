@@ -32,7 +32,7 @@ fn config_or_default(path: &Path) -> Result<Config, String> {
     }
 }
 
-fn open_db(cfg_path: &Path, db: Option<&Path>) -> Result<Store, String> {
+pub fn open_db(cfg_path: &Path, db: Option<&Path>) -> Result<Store, String> {
     let path = match db {
         Some(p) => p.to_path_buf(),
         None => Config::load(cfg_path).map_err(s)?.db_path(),

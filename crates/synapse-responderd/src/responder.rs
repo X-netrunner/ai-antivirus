@@ -362,7 +362,7 @@ impl Responder {
                 }
             },
             Decision::DryRun(reason) => {
-                let check = self.preview(action, &target);
+                let check = self.preview(&target);
                 let note = format!("{reason}; {check}");
                 self.update(id, ActionStatus::DryRun, None, Some(&note), None, now)?;
                 info!(
@@ -443,7 +443,7 @@ impl Responder {
     }
 
     /// What a dry run would have run into (read-only).
-    fn preview(&self, action: Action, target: &Target) -> String {
+    fn preview(&self, target: &Target) -> String {
         let (allow, pacman, me) = self.cx();
         let cx = Context {
             allow_exe: &allow,
@@ -469,16 +469,21 @@ impl Responder {
                 }
             }
             Target::File { path } => {
-                guard::check_file(Path::new(path), self.package_of(path).as_deref(), &cx)
-                    .map(|()| "the file may be quarantined".into())
+                guard::check_file(Path::new(path), self.package_of(path).as_deref(), &cx).and_then(
+                    |()| match std::fs::symlink_metadata(path) {
+                        Ok(m) if m.is_file() => Ok("the file may be quarantined".into()),
+                        Ok(_) => Err(Refusal("it is not a regular file".into())),
+                        Err(e) => Err(Refusal(format!("it cannot be read ({e})"))),
+                    },
+                )
             }
             Target::Ip { addr } => {
                 guard::check_ip(*addr).map(|()| "the address may be blocked".into())
             }
         };
-        match (action, res) {
-            (_, Ok(s)) => s,
-            (_, Err(r)) => format!("it would be refused: {r}"),
+        match res {
+            Ok(s) => s,
+            Err(r) => format!("it would be refused: {r}"),
         }
     }
 

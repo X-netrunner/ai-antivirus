@@ -1,13 +1,15 @@
 //! `synapsectl`: command line interface for Synapse.
 //!
 //! Commands: `config-check`, `db-init`, `db-stats`, `db-cleanup` (M0),
-//! `tail` (M1), and `alerts`, `scan`, `rules`, `trust-baseline`, `integrity`,
-//! `hash-add` (M3).
+//! `tail` (M1), `alerts`, `scan`, `rules`, `trust-baseline`, `integrity`,
+//! `hash-add` (M3), and `actions`, `approve`, `reject`, `undo`, `breaker-reset`,
+//! `responder-status` (M4).
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod detect;
 mod render;
+mod respond;
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -20,6 +22,7 @@ use synapse_common::event::{now_ns, Envelope};
 use synapse_common::eventlog::{self, Follower};
 use synapse_common::store::Store;
 use synapse_common::{logging, Error};
+use synapse_responderd::ipc::Request;
 
 #[derive(Parser)]
 #[command(name = "synapsectl", version, about = "Synapse EDR control tool")]
@@ -123,6 +126,46 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
     },
+    /// Show what the responder did, would do, or waits for approval to do.
+    Actions {
+        #[arg(short = 'n', long, default_value_t = 20)]
+        lines: usize,
+        /// Only actions waiting for approval.
+        #[arg(long)]
+        pending: bool,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
+    /// Approve a pending action; the responder runs it now (root).
+    Approve {
+        id: i64,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reject a pending action (root).
+    Reject {
+        id: i64,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reverse an executed action: thaw, restore a quarantined file, lift a block (root).
+    Undo {
+        id: i64,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Close the circuit breaker so automatic actions resume (root).
+    BreakerReset {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mode, dry-run, circuit breaker and pending count, from the running responder (root).
+    ResponderStatus {
+        #[arg(long)]
+        json: bool,
+    },
     /// Add a file or SHA-256 to the hash table as bad (the default) or good.
     HashAdd {
         /// A file, or a SHA-256 in hex.
@@ -180,6 +223,19 @@ fn main() -> ExitCode {
             detect::hash_add(&cli.config, db.as_deref(), what, *good, label.as_deref())
                 .map(|()| false),
         ),
+        Command::Actions {
+            lines,
+            pending,
+            json,
+            db,
+        } => Some(
+            respond::actions(&cli.config, db.as_deref(), *lines, *json, *pending).map(|()| false),
+        ),
+        Command::Approve { id, json } => control(&cli.config, &Request::Approve { id: *id }, *json),
+        Command::Reject { id, json } => control(&cli.config, &Request::Reject { id: *id }, *json),
+        Command::Undo { id, json } => control(&cli.config, &Request::Undo { id: *id }, *json),
+        Command::BreakerReset { json } => control(&cli.config, &Request::BreakerReset, *json),
+        Command::ResponderStatus { json } => control(&cli.config, &Request::Status, *json),
         _ => None,
     };
     if let Some(r) = found {
@@ -204,6 +260,11 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// A refused request exits with status 1, like "found something".
+fn control(cfg: &Path, req: &Request, json: bool) -> Option<Result<bool, String>> {
+    Some(respond::control(cfg, req, json).map(|ok| !ok))
 }
 
 fn run(cli: &Cli) -> Result<(), Error> {
@@ -263,7 +324,13 @@ fn run(cli: &Cli) -> Result<(), Error> {
         | Command::Rules { .. }
         | Command::TrustBaseline { .. }
         | Command::Integrity { .. }
-        | Command::HashAdd { .. } => Ok(()), // handled in main
+        | Command::HashAdd { .. }
+        | Command::Actions { .. }
+        | Command::Approve { .. }
+        | Command::Reject { .. }
+        | Command::Undo { .. }
+        | Command::BreakerReset { .. }
+        | Command::ResponderStatus { .. } => Ok(()), // handled in main
         Command::DbCleanup { db } => {
             let cfg = Config::load(&cli.config)?;
             let path = db.clone().unwrap_or_else(|| cfg.db_path());

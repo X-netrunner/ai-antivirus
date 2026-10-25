@@ -1910,6 +1910,7 @@ dependencies = [
  "serde_json",
  "synapse-common",
  "synapse-engined",
+ "synapse-responderd",
  "synapse-rules",
  "toml",
 ]
