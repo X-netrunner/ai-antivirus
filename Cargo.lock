@@ -1964,7 +1964,7 @@ dependencies = [
 
 [[package]]
 name = "synapse-ai"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "clap",
  "libc",
@@ -1981,7 +1981,7 @@ dependencies = [
 
 [[package]]
 name = "synapse-common"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "libc",
  "rusqlite",
@@ -1997,11 +1997,11 @@ dependencies = [
 
 [[package]]
 name = "synapse-ebpf-common"
-version = "0.6.0"
+version = "0.7.0"
 
 [[package]]
 name = "synapse-engined"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "clap",
  "flate2",
@@ -2016,7 +2016,7 @@ dependencies = [
 
 [[package]]
 name = "synapse-notify"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "clap",
  "serde_json",
@@ -2027,7 +2027,7 @@ dependencies = [
 
 [[package]]
 name = "synapse-responderd"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "clap",
  "flate2",
@@ -2045,7 +2045,7 @@ dependencies = [
 
 [[package]]
 name = "synapse-rules"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "ed25519-dalek",
  "flate2",
@@ -2063,7 +2063,7 @@ dependencies = [
 
 [[package]]
 name = "synapse-sensord"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "aya",
  "clap",
@@ -2077,14 +2077,14 @@ dependencies = [
 
 [[package]]
 name = "synapse-sys"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "synapsectl"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "clap",
  "flate2",
@@ -2775,7 +2775,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.6.0"
+version = "0.7.0"
 
 [[package]]
 name = "yara-x"
