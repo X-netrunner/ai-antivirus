@@ -216,8 +216,12 @@ impl Bundle {
                     .collect()
             })
             .unwrap_or_default();
+        // a file alert names its file; an exec alert (it carries argv) names the program that ran
+        let subject = s("path").or_else(|| d.get("argv").and_then(|_| s("exe")));
         let file = if with_file {
-            s("path").map(|p| inspect_file(&p))
+            subject
+                .filter(|p| p.starts_with('/'))
+                .map(|p| inspect_file(&p))
         } else {
             None
         };
@@ -333,6 +337,39 @@ mod tests {
         assert_eq!(s.len(), MAX_STRINGS);
         assert!(s.iter().any(|x| x.starts_with("this is a rather long")));
         assert!(extract_strings(b"ab\0cd").is_empty());
+    }
+
+    #[test]
+    fn an_exec_alert_inspects_the_program_that_ran() {
+        let dir = tempfile::tempdir().unwrap();
+        let prog = dir.path().join("run.sh");
+        std::fs::write(
+            &prog,
+            "#!/bin/sh\necho contacting update.example.invalid now\n",
+        )
+        .unwrap();
+        let mk = |detail: serde_json::Value| AlertRow {
+            id: 1,
+            ts_ns: 1,
+            rule_id: "SYN-B-0013".into(),
+            severity: Severity::Medium,
+            confidence: 0.5,
+            title: "t".into(),
+            proc_key: None,
+            detail,
+            acknowledged: false,
+        };
+        let exec = Bundle::from_alert(
+            &mk(serde_json::json!({"exe": prog, "argv": ["run.sh"]})),
+            true,
+        );
+        assert_eq!(exec.file.unwrap().domains, ["update.example.invalid"]);
+        // a non-exec alert (no argv) does not read the acting program
+        let other = Bundle::from_alert(
+            &mk(serde_json::json!({"exe": prog, "dst": "198.51.100.1:443"})),
+            true,
+        );
+        assert!(other.file.is_none());
     }
 
     #[test]

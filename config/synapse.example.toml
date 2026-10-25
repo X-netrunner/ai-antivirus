@@ -58,3 +58,4 @@ format = 'text'                # text | json
 state_dir = '/var/lib/synapse'
 log_dir = '/var/log/synapse'
 run_dir = '/run/synapse'
+ai_dir = '/var/lib/synapse-ai'   # the analyzer's spool/ and out/, apart from state_dir

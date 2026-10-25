@@ -271,6 +271,9 @@ pub struct PathsConfig {
     pub state_dir: PathBuf,
     pub log_dir: PathBuf,
     pub run_dir: PathBuf,
+    /// The analyzer's own folder (`spool/` and `out/`), apart from `state_dir` so `synapse-ai` cannot reach the database
+    /// or the event log. Added in M5.
+    pub ai_dir: PathBuf,
 }
 
 impl Default for PathsConfig {
@@ -279,6 +282,7 @@ impl Default for PathsConfig {
             state_dir: PathBuf::from("/var/lib/synapse"),
             log_dir: PathBuf::from("/var/log/synapse"),
             run_dir: PathBuf::from("/run/synapse"),
+            ai_dir: PathBuf::from("/var/lib/synapse-ai"),
         }
     }
 }
@@ -347,12 +351,12 @@ impl Config {
 
     /// Bundles waiting for the AI analyzer (written by the engine, read by `synapse-ai`).
     pub fn ai_spool_dir(&self) -> PathBuf {
-        self.paths.state_dir.join("ai").join("spool")
+        self.paths.ai_dir.join("spool")
     }
 
     /// The analyzer's answers waiting for the engine (written by `synapse-ai`, read and removed by the engine).
     pub fn ai_out_dir(&self) -> PathBuf {
-        self.paths.state_dir.join("ai").join("out")
+        self.paths.ai_dir.join("out")
     }
 
     /// Where quarantined files are kept (never deleted automatically).
@@ -493,6 +497,7 @@ impl Config {
         check_abs(&mut p, "paths.state_dir", &self.paths.state_dir);
         check_abs(&mut p, "paths.log_dir", &self.paths.log_dir);
         check_abs(&mut p, "paths.run_dir", &self.paths.run_dir);
+        check_abs(&mut p, "paths.ai_dir", &self.paths.ai_dir);
         check_abs(&mut p, "response.cgroup_root", &self.response.cgroup_root);
         check_abs(&mut p, "response.notify_dir", &self.response.notify_dir);
 

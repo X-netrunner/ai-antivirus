@@ -15,5 +15,8 @@ synapse-responderd = { path = "../synapse-responderd" }
 synapse-rules = { path = "../synapse-rules" }
 toml.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

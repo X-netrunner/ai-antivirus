@@ -236,7 +236,7 @@ mod tests {
 
     fn cfg(dir: &Path) -> Config {
         let mut c = Config::default();
-        c.paths.state_dir = dir.to_path_buf();
+        c.paths.ai_dir = dir.to_path_buf();
         c.ai.enabled = true;
         c.ai.corpus = dir.join("corpus.jsonl");
         fs::create_dir_all(c.ai_spool_dir()).unwrap();

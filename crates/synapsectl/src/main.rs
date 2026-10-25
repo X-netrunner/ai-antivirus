@@ -7,6 +7,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod advice;
 mod detect;
 mod render;
 mod respond;
@@ -167,6 +168,47 @@ enum Command {
         json: bool,
     },
     /// Add a file or SHA-256 to the hash table as bad (the default) or good.
+    /// Show what the AI analyzer said about alerts (advice only).
+    AiNotes {
+        #[arg(short = 'n', long, default_value_t = 20)]
+        lines: usize,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
+    /// List rule proposals (from the AI analyzer) and their state.
+    Proposals {
+        #[arg(short = 'n', long, default_value_t = 20)]
+        lines: usize,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
+    /// Show the exact rule that approving a proposal would install.
+    ProposalShow {
+        id: i64,
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
+    /// Approve a pending rule proposal: installs it as a LOCAL rule (run as root; the engine reloads it).
+    ApproveRule {
+        id: i64,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// Rules directory instead of `engine.rules_dir`.
+        #[arg(long)]
+        rules: Option<PathBuf>,
+    },
+    /// Reject a pending rule proposal.
+    RejectRule {
+        id: i64,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
     HashAdd {
         /// A file, or a SHA-256 in hex.
         what: String,
@@ -230,6 +272,21 @@ fn main() -> ExitCode {
             db,
         } => Some(
             respond::actions(&cli.config, db.as_deref(), *lines, *json, *pending).map(|()| false),
+        ),
+        Command::AiNotes { lines, json, db } => {
+            Some(advice::ai_notes(&cli.config, db.as_deref(), *lines, *json).map(|()| false))
+        }
+        Command::Proposals { lines, json, db } => {
+            Some(advice::proposals(&cli.config, db.as_deref(), *lines, *json).map(|()| false))
+        }
+        Command::ProposalShow { id, db } => {
+            Some(advice::proposal_show(&cli.config, db.as_deref(), *id).map(|()| false))
+        }
+        Command::ApproveRule { id, db, rules } => Some(
+            advice::approve_rule(&cli.config, db.as_deref(), *id, rules.as_deref()).map(|()| false),
+        ),
+        Command::RejectRule { id, reason, db } => Some(
+            advice::reject_rule(&cli.config, db.as_deref(), *id, reason.as_deref()).map(|()| false),
         ),
         Command::Approve { id, json } => control(&cli.config, &Request::Approve { id: *id }, *json),
         Command::Reject { id, json } => control(&cli.config, &Request::Reject { id: *id }, *json),
@@ -326,6 +383,11 @@ fn run(cli: &Cli) -> Result<(), Error> {
         | Command::Integrity { .. }
         | Command::HashAdd { .. }
         | Command::Actions { .. }
+        | Command::AiNotes { .. }
+        | Command::Proposals { .. }
+        | Command::ProposalShow { .. }
+        | Command::ApproveRule { .. }
+        | Command::RejectRule { .. }
         | Command::Approve { .. }
         | Command::Reject { .. }
         | Command::Undo { .. }
