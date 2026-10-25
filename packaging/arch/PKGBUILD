@@ -1,0 +1,76 @@
+# Maintainer: the machine's owner
+#
+# Builds Synapse from the working tree this file sits in (packaging/arch/ inside the repository):
+#     cd packaging/arch && makepkg -f           # then: sudo pacman -U synapse-edr-*.pkg.tar.zst
+#
+# The user-space programs build with the stable or nightly Rust toolchain. The kernel-side eBPF object needs the
+# *nightly* toolchain with rust-src and `bpf-linker` (cargo install bpf-linker); build() tells you if either is missing.
+# If target/bpf/synapse-ebpf.o already exists in the tree it is used as it is.
+pkgname=synapse-edr
+pkgver=0.7.0
+pkgrel=1
+pkgdesc='AI-assisted EDR and antivirus for Arch Linux (alert-only by default)'
+arch=(x86_64)
+url='https://localhost/'
+license=(custom)   # none chosen yet; see the README
+depends=(glibc gcc-libs sqlite libarchive util-linux)
+makedepends=(rust clang)
+optdepends=(
+  'nftables: network blocks (synapse-responderd)'
+  'libnotify: desktop notifications (synapse-notify)'
+  'ollama: local model for the AI analyzer (synapse-ai)'
+)
+backup=(etc/synapse/synapse.toml)
+install=synapse-edr.install
+options=(!lto)
+
+_root="$(cd "$startdir/../.." && pwd)"
+
+prepare() {
+  cd "$_root"
+  export CARGO_TARGET_DIR="$srcdir/target"
+  cargo fetch --locked
+}
+
+build() {
+  cd "$_root"
+  export CARGO_TARGET_DIR="$srcdir/target"
+  cargo build --release --frozen \
+    -p synapse-sensord -p synapse-engined -p synapse-responderd -p synapse-ai -p synapse-notify -p synapsectl
+  if [ ! -f target/bpf/synapse-ebpf.o ]; then
+    command -v bpf-linker >/dev/null || { echo "bpf-linker is missing (cargo install bpf-linker), or provide target/bpf/synapse-ebpf.o"; return 1; }
+    unset CARGO_TARGET_DIR
+    cargo xtask build-ebpf --release
+  fi
+}
+
+package() {
+  cd "$_root"
+  local t="$srcdir/target/release"
+  for b in synapse-sensord synapse-engined synapse-responderd synapse-ai synapse-notify synapsectl; do
+    install -Dm755 "$t/$b" "$pkgdir/usr/bin/$b"
+  done
+  install -Dm644 target/bpf/synapse-ebpf.o "$pkgdir/usr/lib/synapse/synapse-ebpf.o"
+  install -Dm755 packaging/arch/pacman-post "$pkgdir/usr/lib/synapse/pacman-post"
+
+  for u in sensord engined responderd ai; do
+    install -Dm644 "packaging/systemd/synapse-$u.service" "$pkgdir/usr/lib/systemd/system/synapse-$u.service"
+  done
+  install -Dm644 packaging/systemd/user/synapse-notify.service "$pkgdir/usr/lib/systemd/user/synapse-notify.service"
+
+  install -Dm644 packaging/arch/synapse-sysusers.conf "$pkgdir/usr/lib/sysusers.d/synapse.conf"
+  install -Dm644 packaging/arch/synapse-tmpfiles.conf "$pkgdir/usr/lib/tmpfiles.d/synapse.conf"
+  install -Dm644 packaging/arch/00-synapse-pre.hook "$pkgdir/usr/share/libalpm/hooks/00-synapse-pre.hook"
+  install -Dm644 packaging/arch/zz-synapse-post.hook "$pkgdir/usr/share/libalpm/hooks/zz-synapse-post.hook"
+
+  install -Dm644 config/synapse.example.toml "$pkgdir/etc/synapse/synapse.toml"
+
+  # shipped rules: owned by the package, so a changed rule shows up in `pacman -Qkk` and in Synapse's own integrity check
+  install -Dm644 rules/behavior/00-shipped.toml "$pkgdir/var/lib/synapse/rules/behavior/00-shipped.toml"
+  for y in rules/yara/*.yar; do
+    install -Dm644 "$y" "$pkgdir/var/lib/synapse/rules/yara/$(basename "$y")"
+  done
+
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 CHANGELOG.md "$pkgdir/usr/share/doc/$pkgname/CHANGELOG.md"
+}

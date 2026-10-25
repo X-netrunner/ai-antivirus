@@ -1,0 +1,15 @@
+# Install as /usr/share/libalpm/hooks/zz-synapse-post.hook
+# After every transaction: the packages that changed are read into Synapse's trust cache, so the files an upgrade
+# replaced are trusted again at once and legitimate `pacman -Syu` runs do not look like tampering.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = *
+
+[Action]
+Description = Synapse: refreshing the trust cache for the changed packages
+When = PostTransaction
+NeedsTargets
+Exec = /usr/lib/synapse/pacman-post
