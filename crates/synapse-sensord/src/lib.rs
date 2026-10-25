@@ -257,6 +257,10 @@ pub fn run(cfg: &Config, shutdown: &Arc<AtomicBool>) -> Result<()> {
         }
     }
 
+    if restart_reason.is_some() {
+        // the sensor threads only stop when told to; without this the join below would wait forever
+        shutdown.store(true, Ordering::Relaxed);
+    }
     heartbeat.stopping();
     // Drain what the sensors queued before they noticed the shutdown.
     let pending: Vec<Stamped> = rx.try_iter().collect();
