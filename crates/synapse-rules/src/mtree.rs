@@ -36,6 +36,35 @@ pub struct MtreeEntry {
 pub struct LocalPackage {
     pub name: String,
     pub dir: PathBuf,
+    /// `%BACKUP%` files: configuration the package expects you to edit (`/etc/pacman.conf`). They are not trust material.
+    pub backup: Vec<PathBuf>,
+}
+
+/// The first line of section `%NAME%` and the paths of section `%BACKUP%` in a pacman database file (`desc` has the name,
+/// `files` the backup list).
+fn parse_sections(desc: &str) -> (Option<String>, Vec<PathBuf>) {
+    let (mut name, mut backup, mut section) = (None, Vec::new(), "");
+    for line in desc.lines() {
+        if line.starts_with('%') && line.ends_with('%') {
+            section = line;
+            continue;
+        }
+        if line.is_empty() {
+            section = "";
+            continue;
+        }
+        match section {
+            "%NAME%" if name.is_none() => name = Some(line.to_owned()),
+            // `etc/pacman.conf\t<md5>`
+            "%BACKUP%" => {
+                if let Some(p) = line.split('\t').next().filter(|p| !p.is_empty()) {
+                    backup.push(Path::new("/").join(p));
+                }
+            }
+            _ => {}
+        }
+    }
+    (name, backup)
 }
 
 /// Every installed package (sorted by name).
@@ -50,16 +79,12 @@ pub fn local_packages(local: &Path) -> Result<Vec<LocalPackage>> {
         let Ok(desc) = fs::read_to_string(dir.join("desc")) else {
             continue;
         };
-        let mut lines = desc.lines();
-        let name = loop {
-            match lines.next() {
-                Some("%NAME%") => break lines.next().map(str::to_owned),
-                Some(_) => {}
-                None => break None,
-            }
-        };
+        let (name, _) = parse_sections(&desc);
+        let backup = fs::read_to_string(dir.join("files"))
+            .map(|f| parse_sections(&f).1)
+            .unwrap_or_default();
         if let Some(name) = name.filter(|n| !n.is_empty()) {
-            out.push(LocalPackage { name, dir });
+            out.push(LocalPackage { name, dir, backup });
         }
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -162,14 +187,16 @@ pub fn parse_mtree<R: BufRead>(reader: R) -> Result<Vec<MtreeEntry>> {
     Ok(out)
 }
 
-/// The file entries of one installed package.
+/// The file entries of one installed package, without its `%BACKUP%` (editable configuration) files.
 pub fn package_files(pkg: &LocalPackage) -> Result<Vec<MtreeEntry>> {
     let p = pkg.dir.join("mtree");
     let f = File::open(&p).map_err(|e| Error::io(&p, e))?;
-    parse_mtree(BufReader::new(GzDecoder::new(f))).map_err(|e| match e {
+    let mut entries = parse_mtree(BufReader::new(GzDecoder::new(f))).map_err(|e| match e {
         Error::Mtree(m) => Error::Mtree(format!("{}: {m}", p.display())),
         other => other,
-    })
+    })?;
+    entries.retain(|e| !pkg.backup.contains(&e.path));
+    Ok(entries)
 }
 
 /// A pacman transaction is running (its lock file exists).
@@ -218,6 +245,11 @@ mod tests {
         let pkg = dir.path().join("bash-5.3-1");
         fs::create_dir(&pkg).unwrap();
         fs::write(pkg.join("desc"), "%NAME%\nbash\n\n%VERSION%\n5.3-1\n").unwrap();
+        fs::write(
+            pkg.join("files"),
+            "%FILES%\nusr/\nusr/bin/bash\n\n%BACKUP%\nusr/share/doc/a file\tabc\n\n",
+        )
+        .unwrap();
         let mut gz = GzEncoder::new(
             File::create(pkg.join("mtree")).unwrap(),
             flate2::Compression::default(),
@@ -228,6 +260,12 @@ mod tests {
         let pkgs = local_packages(dir.path()).unwrap();
         assert_eq!(pkgs.len(), 1);
         assert_eq!(pkgs[0].name, "bash");
-        assert_eq!(package_files(&pkgs[0]).unwrap().len(), 2);
+        assert_eq!(pkgs[0].backup, vec![PathBuf::from("/usr/share/doc/a file")]);
+        // the backup (editable) file is left out
+        let files = package_files(&pkgs[0]).unwrap();
+        assert_eq!(
+            files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(),
+            vec![PathBuf::from("/usr/bin/bash")]
+        );
     }
 }

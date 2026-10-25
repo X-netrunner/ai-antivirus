@@ -74,8 +74,8 @@ pub struct FileCheck {
     cache: HashMap<FileId, Outcome>,
     per_sec: u32,
     bucket: (Instant, u32),
-    /// package name -> its pacman database directory (rebuilt when a name is missing)
-    packages: HashMap<String, PathBuf>,
+    /// package name -> its pacman database entry (rebuilt when a name is missing)
+    packages: HashMap<String, LocalPackage>,
     pacman_local: PathBuf,
     pub stats: FileStats,
 }
@@ -252,14 +252,9 @@ impl FileCheck {
     fn refresh_package(&mut self, store: &mut Store, package: &str, path: &[u8]) -> Option<Sha256> {
         if !self.packages.contains_key(package) {
             let list: Vec<LocalPackage> = mtree::local_packages(&self.pacman_local).ok()?;
-            self.packages = list.into_iter().map(|p| (p.name, p.dir)).collect();
+            self.packages = list.into_iter().map(|p| (p.name.clone(), p)).collect();
         }
-        let dir = self.packages.get(package)?.clone();
-        let files = mtree::package_files(&LocalPackage {
-            name: package.to_owned(),
-            dir,
-        })
-        .ok()?;
+        let files = mtree::package_files(self.packages.get(package)?).ok()?;
         let entries: Vec<TrustEntry> = files.iter().map(|f| trust_entry(package, f, 0)).collect();
         if let Err(e) = store.trust_replace_package(package, &entries) {
             warn!(error = %e, package, "cannot refresh the trust cache");
