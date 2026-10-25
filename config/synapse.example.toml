@@ -36,6 +36,9 @@ enabled = false
 endpoint = 'http://127.0.0.1:11434'
 model = 'set-your-local-model' # must be changed before enabling
 timeout_secs = 30              # 1..=300
+max_per_hour = 60              # 1..=3600; alerts sent to the model per hour
+min_severity = 'medium'        # low | medium | high | critical: alerts at or above this are analyzed
+corpus = '/var/lib/synapse/corpus/benign.jsonl'  # recording of ordinary activity; a proposed rule that fires on it is rejected
 
 [response]
 auto_levels_max = 3            # 0..=6, further capped by the mode; higher levels wait for `synapsectl approve`

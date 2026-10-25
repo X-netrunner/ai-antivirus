@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 
 use crate::error::{Error, Result};
+use crate::model::Severity;
 
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/synapse/synapse.toml";
 const MAX_CONFIG_BYTES: u64 = 1 << 20;
@@ -187,6 +188,12 @@ pub struct AiConfig {
     pub endpoint: String,
     pub model: String,
     pub timeout_secs: u32,
+    /// Most alerts sent to the model per hour (the rest are not analyzed). Added in M5.
+    pub max_per_hour: u32,
+    /// Alerts at or above this severity are analyzed.
+    pub min_severity: Severity,
+    /// A recording of ordinary activity (an event log). A proposed rule that fires on it is rejected automatically.
+    pub corpus: PathBuf,
 }
 
 impl Default for AiConfig {
@@ -196,6 +203,9 @@ impl Default for AiConfig {
             endpoint: "http://127.0.0.1:11434".to_owned(),
             model: PLACEHOLDER_MODEL.to_owned(),
             timeout_secs: 30,
+            max_per_hour: 60,
+            min_severity: Severity::Medium,
+            corpus: PathBuf::from("/var/lib/synapse/corpus/benign.jsonl"),
         }
     }
 }
@@ -432,6 +442,8 @@ impl Config {
             10_000,
         );
         range(&mut p, "ai.timeout_secs", self.ai.timeout_secs, 1, 300);
+        range(&mut p, "ai.max_per_hour", self.ai.max_per_hour, 1, 3600);
+        check_abs(&mut p, "ai.corpus", &self.ai.corpus);
         range(
             &mut p,
             "response.auto_levels_max",

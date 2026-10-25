@@ -19,13 +19,15 @@ use crate::error::{Error, Result};
 use crate::event::{Envelope, ProcKey, Sha256};
 use crate::model::{ActionStatus, HashClass, ProposalStatus, Severity};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 const SCHEMA_V1: &str = include_str!("schema_v1.sql");
 const SCHEMA_V2: &str = include_str!("schema_v2.sql");
+const SCHEMA_V3: &str = include_str!("schema_v3.sql");
 
 /// Fixed table list used for statistics. Never built from outside input.
-const TABLES: [&str; 9] = [
+const TABLES: [&str; 10] = [
     "state",
+    "ai_notes",
     "events",
     "alerts",
     "verdicts",
@@ -151,6 +153,9 @@ impl Store {
             }
             if found < 2 {
                 tx.execute_batch(SCHEMA_V2)?;
+            }
+            if found < 3 {
+                tx.execute_batch(SCHEMA_V3)?;
             }
             tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
             tx.commit()?;
@@ -793,6 +798,77 @@ impl Store {
     }
 }
 
+/// The analyzer's advice about one alert (M5).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AiNoteRow {
+    pub id: i64,
+    pub ts_ns: u64,
+    pub alert_id: Option<i64>,
+    pub model: String,
+    pub verdict: String,
+    pub confidence: f64,
+    pub summary: String,
+    pub techniques: serde_json::Value,
+    pub indicators: serde_json::Value,
+    pub injection_suspected: bool,
+    pub problems: serde_json::Value,
+}
+
+impl Store {
+    pub fn insert_ai_note(&self, n: &AiNoteRow) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO ai_notes (ts_ns, alert_id, model, verdict, confidence, summary, techniques, indicators,
+                                   injection_suspected, problems)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                to_i64(n.ts_ns, "ts_ns")?,
+                n.alert_id,
+                n.model,
+                n.verdict,
+                n.confidence,
+                n.summary,
+                n.techniques.to_string(),
+                n.indicators.to_string(),
+                i64::from(n.injection_suspected),
+                n.problems.to_string(),
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// The newest `limit` notes, oldest first.
+    pub fn recent_ai_notes(&self, limit: usize) -> Result<Vec<AiNoteRow>> {
+        let limit = i64::try_from(limit.min(MAX_RECENT)).unwrap_or(0);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, ts_ns, alert_id, model, verdict, confidence, summary, techniques, indicators,
+                    injection_suspected, problems FROM ai_notes ORDER BY id DESC LIMIT ?1",
+        )?;
+        let json = |s: String| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null);
+        let rows = stmt.query_map([limit], |r| {
+            Ok(AiNoteRow {
+                id: r.get(0)?,
+                ts_ns: u64::try_from(r.get::<_, i64>(1)?).unwrap_or(0),
+                alert_id: r.get(2)?,
+                model: r.get(3)?,
+                verdict: r.get(4)?,
+                confidence: r.get(5)?,
+                summary: r.get(6)?,
+                techniques: json(r.get(7)?),
+                indicators: json(r.get(8)?),
+                injection_suspected: r.get::<_, i64>(9)? != 0,
+                problems: json(r.get(10)?),
+            })
+        })?;
+        let mut out = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        out.reverse();
+        Ok(out)
+    }
+
+    pub fn get_proposal(&self, id: i64) -> Result<Option<ProposalRow>> {
+        Ok(self.proposals(MAX_RECENT)?.into_iter().find(|p| p.id == id))
+    }
+}
+
 fn to_i64(v: u64, what: &'static str) -> Result<i64> {
     i64::try_from(v).map_err(|_| Error::OutOfRange(what))
 }
@@ -827,7 +903,7 @@ mod tests {
             .unwrap();
         }
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 2);
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
         let a = store.get_action(1).unwrap().unwrap();
         assert_eq!(
             (a.action.as_str(), a.status),
@@ -854,6 +930,36 @@ mod tests {
         assert_eq!(store.max_alert_id().unwrap(), 7);
         assert_eq!(store.get_alert(3).unwrap().unwrap().id, 3);
         assert!(store.get_alert(99).unwrap().is_none());
+    }
+
+    #[test]
+    fn ai_notes_round_trip() {
+        let store = Store::open_in_memory().unwrap();
+        let note = AiNoteRow {
+            id: 0,
+            ts_ns: 5,
+            alert_id: None,
+            model: "m".into(),
+            verdict: "suspicious".into(),
+            confidence: 0.5,
+            summary: "s".into(),
+            techniques: serde_json::json!(["T1059"]),
+            indicators: serde_json::json!([{"kind": "ip", "value": "198.51.100.1"}]),
+            injection_suspected: true,
+            problems: serde_json::json!([]),
+        };
+        let id = store.insert_ai_note(&note).unwrap();
+        let back = store.recent_ai_notes(5).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].id, id);
+        assert!(back[0].injection_suspected);
+        assert_eq!(back[0].techniques[0], "T1059");
+        assert!(store
+            .insert_ai_note(&AiNoteRow {
+                verdict: "bogus".into(),
+                ..note
+            })
+            .is_err());
     }
 
     #[test]
