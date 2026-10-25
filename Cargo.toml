@@ -7,6 +7,7 @@ members = [
     "crates/synapse-sensord",
     "crates/synapse-rules",
     "crates/synapse-engined",
+    "crates/synapse-ai",
     "crates/synapse-responderd",
     "crates/synapse-notify",
     "crates/synapsectl",
@@ -27,6 +28,7 @@ aya = "0.13"
 clap = { version = "4", features = ["derive"] }
 flate2 = "1"
 libc = "0.2"
+regex = "1"
 rusqlite = "0.37"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -37,6 +39,7 @@ thiserror = "2"
 toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+ureq = { version = "2", default-features = false, features = ["json"] }
 url = "2"
 yara-x = { version = "1", default-features = false, features = ["constant-folding", "exact-atoms", "fast-regexp", "elf-module", "hash-module", "math-module", "string-module"] }
 
