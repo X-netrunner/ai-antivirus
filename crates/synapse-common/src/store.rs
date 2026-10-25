@@ -674,11 +674,13 @@ impl Store {
         Ok(out)
     }
 
-    /// Actions really executed since `since_ns` (the circuit breaker counts these).
-    pub fn executed_since(&self, since_ns: u64) -> Result<u64> {
+    /// Automatic actions (no human decided them) of at least `min_level` executed since `since_ns`: what the action
+    /// budget and the circuit breaker count. Notifications (level 1) and approved actions do not use up the budget.
+    pub fn executed_since(&self, since_ns: u64, min_level: u8) -> Result<u64> {
         let n: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM actions WHERE status = 'executed' AND ts_ns >= ?1",
-            [to_i64(since_ns, "since_ns")?],
+            "SELECT COUNT(*) FROM actions
+             WHERE status IN ('executed', 'undone') AND ts_ns >= ?1 AND level >= ?2 AND decided_by IS NULL",
+            params![to_i64(since_ns, "since_ns")?, i64::from(min_level)],
             |r| r.get(0),
         )?;
         Ok(u64::try_from(n).unwrap_or(0))
@@ -885,9 +887,15 @@ mod tests {
         assert_eq!(a.status, ActionStatus::Executed);
         assert_eq!(a.undo.unwrap()["cgroup"], "/x");
         assert_eq!(a.decided_by.as_deref(), Some("root"));
-        assert_eq!(store.executed_since(0).unwrap(), 1);
-        assert_eq!(store.executed_since(11).unwrap(), 0);
-        assert_eq!(store.recent_actions(5).unwrap().len(), 1);
+        assert_eq!(store.executed_since(0, 2).unwrap(), 0, "decided by a human");
+        let auto = store
+            .insert_action(12, None, None, "kill", 3, &t, ActionStatus::Executed)
+            .unwrap();
+        assert_eq!(store.executed_since(0, 2).unwrap(), 1);
+        assert_eq!(store.executed_since(0, 4).unwrap(), 0);
+        assert_eq!(store.executed_since(13, 2).unwrap(), 0);
+        assert!(auto > id);
+        assert_eq!(store.recent_actions(5).unwrap().len(), 2);
 
         assert!(store.state_get("breaker").unwrap().is_none());
         store.state_set("breaker", "tripped", 1).unwrap();
