@@ -2,6 +2,26 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow milestones until 1.0.
 
+## [0.5.0] - M4: responder with dry-run, approval and undo (unreleased)
+
+### Added
+- `synapse-responderd`: follows the alerts table (cursor in `state`; the history before the first start is skipped) and turns each alert's action into an `actions` row. Decides by mode ladder, `response.dry_run`, circuit breaker, approval above `response.auto_levels_max` (levels 4 to 6 always), and the per-minute budget `engine.max_actions_per_minute` (automatic level 2+ actions; tripping it falls back to dry runs and notifies). Checks the allowlist against the live system: PID 1, kernel threads, session leaders, Synapse, systemd, `engine.allow_exe`, pacman (lock or ancestry), PID reuse; for files: system and Synapse folders, devices, pacman-owned files; for addresses: loopback, link-local, multicast, unspecified.
+- Actions: `notify` (spool for `synapse-notify`), `freeze` (process tree into `synapse.slice/suspect-<id>`, `cgroup.freeze`), `kill` (freeze then `cgroup.kill`; pidfd SIGKILL without cgroup v2), `quarantine` (mode-000 copy plus sidecar, inode re-check, unlink), `block` (nftables `inet synapse` sets with per-element timeout, JSON via `nft -j -f -`). Undo for freeze, quarantine and block.
+- Control socket `/run/synapse/responder.sock` (0600, root peers only via `SO_PEERCRED`): approve, reject, undo, breaker reset, status.
+- `synapse-notify`: user-session notifier (spool follower, escaped text, burst limit, `notify-send`). `packaging/systemd/user/synapse-notify.service`.
+- `synapsectl actions [--pending]`, `approve`, `reject`, `undo`, `breaker-reset`, `responder-status`.
+- `synapse-sys::process`: `pidfd_open`, `pidfd_send_signal`, `peer_cred`.
+- Store: `get_alert`, `max_alert_id`, `pending_actions`; `executed_since` takes a minimum level and counts only automatic actions.
+- Config: `response.dry_run`, `response.cgroup_root`, `response.notify_dir`.
+- `packaging/systemd/synapse-responderd.service` (root, 8 capabilities). sysusers: group `synapse-notify`. tmpfiles: `/var/lib/synapse/quarantine` (0700 root), `/run/synapse-notify` (2750 root:synapse-notify).
+
+### Changed
+- The engine enforces `engine.allow_exe`: alerts about those programs ask for `notify` at most (`detail.allowlisted`, `detail.rule_action`).
+- Workspace version 0.5.0.
+
+### Fixed
+- `Store::alerts_after` skipped older alerts when more than `limit` arrived at once; it now pages by id.
+
 ## [0.4.0] - M3: rule engine, YARA-X, hash table, pacman trust (unreleased)
 
 ### Added

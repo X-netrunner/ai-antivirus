@@ -2,7 +2,7 @@
 
 AI-assisted EDR and antivirus for Arch Linux. Design: see the Synapse master prompt and design specification (v1.0). This repository is built one milestone at a time.
 
-**Status: M3 built and tested** (Arch, kernel 7.2). M2 compiles and its eBPF programs load and attach on a real kernel (test VM: `partial=false`, `dropped=0`). M3 adds the engine daemon: pacman trust, a hash table, YARA-X and TOML behavior rules, with `synapsectl` commands to read alerts and scan on demand. Default mode is `alert-only`, and nothing can act on the system yet: rules record what the responder (M4) would do.
+**Status: M4 built and unit-tested; not yet run as root on a real system.** M3 (engine: pacman trust, hash table, YARA-X, behavior rules) is built and tested on Arch, kernel 7.2, and M2's eBPF programs load and attach there. M4 adds `synapse-responderd`, which acts on alerts: notify, cgroup freeze, kill, quarantine and nftables block. Every action has a dry run, an undo record (`synapsectl undo`), approval for anything above `response.auto_levels_max`, a per-minute budget and a circuit breaker. The default mode is still `alert-only`: the responder records what it *would* do and sends a desktop notification, nothing more. Before you switch modes, read [M4: the responder](#m4-the-responder), including what has not been tried as root yet.
 
 ## Requirements
 
@@ -113,13 +113,15 @@ crates/synapse-ebpf/     kernel-side eBPF programs (nightly, excluded from the w
 crates/synapse-sensord/  sensor daemon: eBPF + process table, /proc poller fallback, fanotify
 crates/synapse-rules/    behavior-rule schema and matcher, threshold windows, YARA-X glue, pacman mtree reader (M3)
 crates/synapse-engined/  engine daemon: process table, L0-L3 pipeline, alerts, --replay (M3)
+crates/synapse-responderd/  responder daemon: guard, policy, cgroup freeze/kill, quarantine, nft block, undo, control socket (M4)
+crates/synapse-notify/   desktop notifier (user service): shows the responder's notifications with notify-send (M4)
 crates/synapsectl/       CLI
 rules/behavior/          shipped behavior rules (TOML)
 rules/yara/              shipped YARA rules
 xtask/                   `cargo xtask build-ebpf`
 config/                  synapse.example.toml (a test keeps it equal to the defaults)
 packaging/arch/          sysusers.d and tmpfiles.d snippets
-packaging/systemd/       synapse-sensord.service, synapse-engined.service
+packaging/systemd/       synapse-sensord.service, synapse-engined.service, synapse-responderd.service, user/synapse-notify.service
 ```
 
 M2 sensor design:
@@ -171,7 +173,7 @@ confidence = 0.9                  # 0..1
 exclude_exe = []                  # acting programs this rule ignores
 exclude_ancestor_exe = ['/usr/bin/pacman']   # ... or anything running under them
 match = { event = 'exec', exe_in = ['/usr/bin/bash'], stdin_is_socket = true }
-action = 'freeze'                 # log | notify | freeze | kill | quarantine | block | restore (recorded only until M4)
+action = 'freeze'                 # log | notify | freeze | kill | quarantine | block | restore (see M4: what runs depends on the mode)
 ```
 
 `match` keys: `event` (required: `exec`, `exit`, `connect`, `listen`, `file_write`, ...), `exe_in`, `exe_prefix`, `exe_suffix`, `parent_exe_in`; exec only: `argv_contains`, `stdin_is_socket`, `stdout_is_socket`, `stdin_from_exe_in`; file events: `path_in`, `path_prefix`, `path_not_prefix`, `path_suffix` (`~/x` = in every home), `setuid_file`; network: `port_in`; any: `outside_pacman`. Threshold rules add `scope` (`process` | `process_tree`), `window_secs` and `threshold = { events, distinct_files_written, high_entropy_ratio }`. Unknown keys, keys that do not fit the event kind, relative paths and duplicate ids are errors, all reported at once; the engine refuses to start with broken rules.
@@ -183,6 +185,58 @@ Shipped: SYN-B-0001 reverse shell, 0002 download piped into a shell, 0003 exec f
 - `cargo test --workspace` (unit tests plus `crates/synapse-engined/tests/pipeline.rs`: each rule fires on its pattern and stays quiet on look-alikes such as `ssh host cmd`, `cat x | sh`, npm installs, Steam, editors, `systemctl edit`, pacman hooks), `cargo clippy --workspace --all-targets -- -D warnings`.
 - Test VM (Arch, kernel 7.2.11, sensor + engine running): `pacman -S`/`-R` of several packages including ones with hooks, `makepkg`, `git clone`, `curl`, tar round trips -> **no alerts**; EICAR written to `/tmp` -> one `YARA:eicar.eicar_test_file` alert. The first run found a false positive (pacman runs hooks with a socket on stdin, which matched SYN-B-0001); `exclude_ancestor_exe` fixes it and a test keeps it fixed.
 - This machine (read-only): `trust-baseline` 1257 packages / 249k files in ~1 s; `integrity` over all of them in 39 s: everything matches except `/usr/lib/vlc/plugins/plugins.dat`, a cache a pacman hook rebuilds.
+
+## M4: the responder
+
+```sh
+sudo systemd-sysusers && sudo systemd-tmpfiles --create    # group synapse-notify, /var/lib/synapse/quarantine, /run/synapse-notify
+sudo systemctl enable --now synapse-responderd             # after synapse-engined has created the database
+sudo usermod -aG synapse-notify "$USER"                    # once; log out and in
+systemctl --user enable --now synapse-notify               # desktop notifications (needs notify-send / libnotify)
+
+synapsectl actions [-n 50] [--pending] [--json]           # what was done, would be done, or waits for you
+sudo synapsectl approve ID | reject ID                    # pending actions
+sudo synapsectl undo ID                                   # thaw, restore a quarantined file, lift a block
+sudo synapsectl responder-status                          # mode, dry_run, breaker, pending count
+sudo synapsectl breaker-reset
+```
+
+How an alert is handled. The engine stores the rule's `action` on the alert (capped at `notify` when the acting program is in `engine.allow_exe`). The responder follows the alerts table. On its very first start it skips the existing history. Then, in this order:
+
+1. **Plan.** It works out what the action is aimed at: the alert's process (`freeze`, `kill`), its `path` (`quarantine`) or its `dst` address (`block`). `log` makes no action row. An alert the action cannot apply to (say a freeze with no process) is recorded as `skipped`.
+2. **Decide.**
+   - `notify` always runs.
+   - `restore` is `skipped` (M6).
+   - A level above what `general.mode` allows (alert-only 1, contain 3, enforce 6), or `response.dry_run = true`, or an open circuit breaker: recorded as `dry_run`, with what it would have run into.
+   - A level above `response.auto_levels_max` waits as `pending`. So does anything at level 4 or more, whatever `auto_levels_max` says: quarantine and block always need `synapsectl approve` in M4.
+   - Otherwise it runs, unless the budget is used up. `engine.max_actions_per_minute` counts automatic actions at level 2 and up. Going over trips the breaker, which falls back to dry runs and sends a notification until `breaker-reset`.
+3. **Guard**, checked against the live system at that moment (not the alert). These are never touched:
+   - PID 1, kernel threads, login session leaders, Synapse itself, systemd components, `engine.allow_exe`, and anything running under pacman.
+   - Anything at all while `/var/lib/pacman/db.lck` exists.
+   - A process whose start time no longer matches the alert's `ProcKey`, i.e. its PID was reused.
+   - Files under `/boot`, `/usr/lib/systemd`, `/usr/lib/modules`, `/var/lib/pacman` and Synapse's folders, device files, and any file pacman owns (the reply says which package to reinstall).
+   - Loopback, link-local, multicast and unspecified addresses.
+4. **Act and record the undo:**
+   - `freeze` moves the process and its descendants (up to 512) into `/sys/fs/cgroup/synapse.slice/suspect-<id>` and writes `cgroup.freeze`. Undo thaws it and moves every process back to the cgroup it came from.
+   - `kill` freezes first, then writes `cgroup.kill`. Without cgroup v2 it sends SIGKILL to the process through a pidfd. A kill cannot be undone.
+   - `quarantine` copies the file into `/var/lib/synapse/quarantine/<id>.bin` (mode 000, plus an `<id>.json` sidecar). It checks the path still names the same inode, then removes the original. Undo checks the copy's SHA-256 and links the file back with its owner, mode and mtime. It refuses if something exists at the path by then.
+   - `block` adds the address, with `response.nft_block_ttl_secs` as its timeout, to a set in nftables table `inet synapse`. That table drops input from and output to the set. Commands are JSON on `nft -j -f -` stdin, built from parsed `IpAddr` values. Undo deletes the element.
+
+Every outcome (`executed`, `failed`, `skipped`, `dry_run`, `pending`, `rejected`, `undone`) is a row in `actions` with its reason and who decided it. A notification says what happened and which `synapsectl` command undoes or approves it.
+
+Requirements: cgroup v2 (the Arch default; `cgroup.kill` needs kernel 5.14+), `nftables` for blocks (`nft --version`), and `libnotify` (`notify-send`) in the desktop session. `pidfd_open` needs kernel 5.3+.
+
+### M4 verification
+
+- `cargo test --workspace`. The responder runs against a fake `/proc`, an emulated cgroup tree, a temporary quarantine folder and a recording nft (`crates/synapse-responderd/tests/responder.rs`). That covers every action kind through decide, guard, execute and undo, the circuit breaker, approval and rejection, PID reuse, pacman lock, session leaders, `allow_exe`, pacman-owned files, the loopback block, the alert cursor, and a real `sleep` process killed through a pidfd. The control socket test checks that a non-root peer is refused. Also `cargo clippy --workspace --all-targets -- -D warnings`.
+- Live, unprivileged, with every path in a temporary folder, the real `synapse-responderd` was run in contain mode against alerts written into the database:
+  - a kill alert killed its process (pidfd path; no cgroup root configured);
+  - a freeze of a session leader was refused;
+  - a quarantine was recorded as a dry run (contain allows up to level 3);
+  - the alert that existed before the first start was left alone;
+  - `synapsectl responder-status` from uid 1000 was refused by `SO_PEERCRED`;
+  - `synapse-notify --print` showed the spooled notification with its markup escaped.
+- **Not yet done: a run as root in the test VM.** That run needs to cover a real cgroup freeze, thaw and `cgroup.kill`, a real `nft` table, quarantine and restore of a root-owned file, and the unit's capability set. Do it in the VM before using `contain` or `enforce` on this machine.
 
 ## Decisions and additions beyond the spec
 
@@ -215,9 +269,31 @@ Shipped: SYN-B-0001 reverse shell, 0002 download piped into a shell, 0003 exec f
 - **M3: rule ids SYN-B-0013 and 0014 are new**; the spec folds exec-from-tmp into 0002 and deleted binaries into 0003. Splitting them keeps each `match` table a single AND.
 - **M3: std threads, no tokio.** The engine is one loop over the log; there is no async IPC yet.
 
+- **M4: the responder runs as root** (with a bounding set of 8 capabilities), like the sensor. It must act on any user's processes and files and open the `synapse`-owned database. SQLite, when running as root, gives the WAL/SHM files it creates the database's owner, so the engine keeps working. The responder refuses to start when the database does not exist yet, so it never creates a root-owned one.
+- **M4: the responder follows the `alerts` table** (a cursor in the new `state` table), not a socket from the engine. Same reasoning as the engine and the event log: either daemon restarts alone, and nothing is lost in between. Latency is one poll (300 ms).
+- **M4: human decisions go over a Unix socket** (`/run/synapse/responder.sock`, 0600, peer uid 0 checked with `SO_PEERCRED`), so only the responder process ever changes the system. `synapsectl actions` reads the database directly.
+- **M4: levels 4 to 6 always need approval**, even when `response.auto_levels_max` is higher (spec 8: "until the false-positive rate on your machine is understood"). The config still accepts 0..=6 so a later milestone can lift this without a config change.
+- **M4: notifications go through a spool file**, not D-Bus from the responder. The responder is root and outside any desktop session. `synapse-notify` runs in the session, reads `/run/synapse-notify/notify.jsonl` (group `synapse-notify`) and calls `notify-send` with escaped text after `--`. The spec's stack names zbus; this avoids a D-Bus client in a root daemon and a large dependency.
+- **M4: `kill` freezes first**, then uses `cgroup.kill`, so the whole tree dies at once and no PID can be reused in between. Without cgroup v2: SIGKILL through a pidfd, opened first and then checked against the start time, so the signal cannot reach a process that reused the PID.
+- **M4: quarantine copies and then unlinks** (instead of renaming), so it works across filesystems (`/tmp` is tmpfs) and the original stays put until the copy is synced. Other hard links to the same inode remain (the record keeps `nlink`).
+- **M4: `restore` (level 6) is not built**: it is not in the M4 milestone line. Such actions are recorded as `skipped`; it comes with self-protection (M6).
+- **M4: the engine now enforces `engine.allow_exe`** (it was in the config since M0 but unused): the alert still appears, with `allowlisted` and the rule's original action in its detail, and asks for `notify` only.
+- **M4: config additions** `response.dry_run`, `response.cgroup_root`, `response.notify_dir`.
+- **M4 fix: `Store::alerts_after`** (M4 groundwork) read the newest N alerts and filtered them, so a burst larger than N skipped the older ones. It now pages by id.
+
 ## Not done yet
 
-M4 to M8 in full: no responder (nothing is frozen, killed or quarantined), no AI analyzer, no self-protection, no PKGBUILD or pacman hooks.
+M5 to M8 in full: no AI analyzer, no self-protection, no PKGBUILD or pacman hooks.
+
+M4 specifics:
+
+- **Not run as root on a real system yet** (see M4 verification). Real cgroupfs, nft and capability behaviour are covered only by emulation and by reading the kernel interfaces.
+- `restore` (level 6) is not built; restoring pacman files from the package cache comes in M6.
+- No snapshot before risky actions (spec 8 mentions snapper); no pacman hooks that pause enforcement (M7). The responder checks `db.lck` itself instead.
+- Pending actions never expire. An approved freeze or kill still checks the process's identity first, so a stale approval can only fail, never hit another process.
+- Quarantine cannot touch files under `/usr`, `/etc`, `/boot` (the unit's `ProtectSystem=full`, and the guard refuses pacman-owned files anyway). An unpackaged file in `/usr/local/bin` cannot be quarantined.
+- There is no per-cgroup egress block (spec 8, optional): `block` is per address.
+- The responder has no `Type=notify` watchdog yet (M6).
 
 M3 specifics:
 
@@ -245,6 +321,12 @@ M1 specifics:
 - No license chosen. No CI.
 
 ## Known risks
+
+- **M4 acts on the system once you leave alert-only.** A false positive in `contain` freezes or kills a process you wanted. Freeze is undoable; kill is not. Stay in alert-only and read `synapsectl actions` (every would-be action is recorded) through the soak, then try `contain` with `response.dry_run = true` first.
+- Moving processes between cgroups writes PIDs by number. The responder checks the start time right before and after each move, and moves a newcomer back if the PID was reused in between. The window is microseconds, but it is not zero.
+- Moving a process out of its systemd scope or service is invisible to systemd until undo; `systemctl status` shows it under `synapse.slice`. If systemd stops a unit whose processes were moved away, they stay frozen in the suspect cgroup until undo or a kill.
+- A frozen process holds its locks and open files. Freezing something that holds a lock a desktop component needs can stall that component until undo.
+- `nft` blocks drop traffic in both directions for every process, not only the suspect.
 
 - **False positives are the main M3 risk.** Only a short benign run in a VM and this machine's package files have been checked; the spec's two-week soak (M8) has not happened. Known: SYN-B-0003 fires on runc/Docker (memfd re-exec), SYN-B-0013 on installers and AppImages that run from `/tmp`, SYN-B-0010 could fire on a program not in its exclusion list that writes many compressed files quickly into a home directory, `integrity` reports caches that pacman hooks rebuild (`plugins.dat`).
 - YARA-X needs writable-then-executable memory, so the engine unit cannot use `MemoryDenyWriteExecute=`.

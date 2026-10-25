@@ -1,6 +1,6 @@
 //! Synapse engine daemon (M3): follows the sensor's event log, keeps a process table, runs the file layers (pacman trust,
 //! hash table, YARA-X) and the behavior rules, and stores alerts. It runs as the unprivileged `synapse` user and has no way
-//! to act on the system: what a rule's `action` would do is recorded on the alert for the responder (M4).
+//! to act on the system: a rule's `action` is recorded on the alert, and the responder (M4) decides what of it may run.
 //!
 //! The engine reads the JSONL log instead of a socket from the sensor (spec 4 sketches IPC over Unix sockets). The log is
 //! already the sensor's durable output, it decouples the two processes completely (either can restart alone) and it gives
@@ -111,7 +111,7 @@ pub fn run(cfg: &Config, shutdown: &AtomicBool) -> Result<(), String> {
             warn!(error = %e, "cannot read the event log for warm-up; processes started earlier are unknown")
         }
     }
-    info!(log = %log.display(), mode = cfg.general.mode.as_str(), "engine running (alerts only: nothing is acted on before M4)");
+    info!(log = %log.display(), mode = cfg.general.mode.as_str(), "engine running (alerts only: synapse-responderd acts on them)");
 
     let (mut last_sweep, mut last_stats) = (Instant::now(), Instant::now());
     let mut bad_lines = 0u64;

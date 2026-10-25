@@ -1,5 +1,7 @@
 # Synapse shipped behavior rules (spec 7, layer L3). Format: see README "Behavior rules".
-# Default mode is alert-only: `action` is what the responder WOULD do from M4 on; until then it is only recorded.
+# `action` is what synapse-responderd does with an alert, as far as general.mode allows. The default mode, alert-only,
+# records the action as a dry run and notifies; levels above response.auto_levels_max (and 4+ always) wait for
+# `synapsectl approve`.
 # Not here yet, because the sensor does not report what they need: SYN-B-0007 (file reads), SYN-B-0009 (module loads),
 # SYN-B-0011 (ptrace). See README "M3: not done".
 

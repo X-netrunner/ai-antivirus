@@ -1,0 +1,59 @@
+# Install as /usr/lib/systemd/system/synapse-responderd.service
+#
+# M4 responder daemon: follows the alerts in /var/lib/synapse/synapse.db and acts on them as the mode allows
+# (general.mode, response.*). Shipped config is alert-only: it only records what it would do and notifies.
+# Control socket: /run/synapse/responder.sock (root only, checked with SO_PEERCRED) for synapsectl approve/reject/undo.
+# Not yet in this unit: Type=notify / WatchdogSec= (M6) and SystemCallFilter= (M7).
+#
+# Runs as root with only the capabilities it uses:
+#   CAP_KILL                 signal other users' processes (pidfd SIGKILL when cgroup v2 is missing)
+#   CAP_SYS_PTRACE           read /proc/<pid>/exe of other users' processes (allowlist check)
+#   CAP_DAC_OVERRIDE,        open the database (owned by synapse), move processes between cgroups delegated to users,
+#   CAP_DAC_READ_SEARCH      read and remove files to quarantine
+#   CAP_FOWNER, CAP_CHOWN,   remove files from sticky folders (/tmp) and restore owner, mode (including setuid) and
+#   CAP_FSETID               mtime on undo
+#   CAP_NET_ADMIN            nftables (table inet synapse)
+#
+# The database stays owned by synapse: SQLite, running as root, gives the WAL and SHM files it creates the owner of the
+# database file. The responder never creates the database (it exits if it is missing).
+#
+# ProtectSystem=full (not strict): quarantine must be able to remove files in /home, /tmp, /var/tmp, /dev/shm, /opt and
+# so on. /usr, /boot, /efi and /etc stay read-only, so files there cannot be quarantined (the allowlist also refuses
+# everything pacman owns).
+
+[Unit]
+Description=Synapse EDR responder daemon
+After=local-fs.target synapse-engined.service
+Wants=synapse-engined.service
+ConditionPathExists=/etc/synapse/synapse.toml
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/synapse-responderd --config /etc/synapse/synapse.toml
+Restart=always
+RestartSec=2
+User=root
+UMask=0077
+
+CapabilityBoundingSet=CAP_KILL CAP_SYS_PTRACE CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_CHOWN CAP_FSETID CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=no
+PrivateTmp=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+# writes cgroup.procs / cgroup.freeze / cgroup.kill under /sys/fs/cgroup
+ProtectControlGroups=no
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+IPAddressDeny=any
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

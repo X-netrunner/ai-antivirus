@@ -8,6 +8,7 @@ members = [
     "crates/synapse-rules",
     "crates/synapse-engined",
     "crates/synapse-responderd",
+    "crates/synapse-notify",
     "crates/synapsectl",
     "xtask",
 ]
@@ -16,7 +17,7 @@ members = [
 exclude = ["crates/synapse-ebpf"]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.85"
 publish = false

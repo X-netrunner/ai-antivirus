@@ -1,5 +1,5 @@
 //! The detection pipeline for one event: update the process table, run the file layers (L0 to L2) where a file is
-//! involved, then the behavior rules (L3). Produces alerts; never acts (the responder comes in M4).
+//! involved, then the behavior rules (L3). Produces alerts; never acts (synapse-responderd does, M4).
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -32,7 +32,7 @@ pub struct Alert {
     pub severity: Severity,
     pub confidence: f64,
     pub title: String,
-    /// What the responder would do; recorded only (alert-only until M4).
+    /// What the rule asks the responder to do (capped at `notify` for `engine.allow_exe`).
     pub action: Action,
     /// L0 trust, L1 hash, L2 yara, L3 behavior
     pub layer: &'static str,
