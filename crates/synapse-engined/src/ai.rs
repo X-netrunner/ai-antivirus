@@ -8,6 +8,7 @@
 
 use std::fs;
 use std::io::{BufReader, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use serde_json::json;
@@ -50,8 +51,19 @@ pub fn spool_alert(cfg: &Config, alert: &AlertRow) {
     let text = Bundle::from_alert(alert, true).to_json_capped();
     let tmp = dir.join(format!(".{}.tmp", alert.id));
     let done = dir.join(format!("{}.json", alert.id));
-    let r = fs::File::create(&tmp)
-        .and_then(|mut f| f.write_all(text.as_bytes()).and_then(|()| f.sync_all()))
+    // 0640 on purpose: the engine's umask is 0077, which would make the bundle unreadable for the analyzer (another user,
+    // same group). The spool folder is setgid, so the file belongs to the analyzer's group.
+    let r = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o640)
+        .open(&tmp)
+        .and_then(|mut f| {
+            f.set_permissions(fs::Permissions::from_mode(0o640))?;
+            f.write_all(text.as_bytes())?;
+            f.sync_all()
+        })
         .and_then(|()| fs::rename(&tmp, &done));
     if let Err(e) = r {
         warn!(error = %e, alert = alert.id, "cannot queue the alert for the analyzer");
@@ -293,7 +305,13 @@ mod tests {
         let a = alert(&store);
         spool_alert(&c, &a);
         assert!(c.ai_spool_dir().join(format!("{}.json", a.id)).is_file());
-        let text = fs::read_to_string(c.ai_spool_dir().join(format!("{}.json", a.id))).unwrap();
+        let spooled = c.ai_spool_dir().join(format!("{}.json", a.id));
+        assert_eq!(
+            fs::metadata(&spooled).unwrap().permissions().mode() & 0o777,
+            0o640,
+            "readable for the analyzer's group"
+        );
+        let text = fs::read_to_string(&spooled).unwrap();
         assert!(text.contains("SYN-B-0002"));
         c.ai.enabled = false;
         fs::remove_dir_all(c.ai_spool_dir()).unwrap();

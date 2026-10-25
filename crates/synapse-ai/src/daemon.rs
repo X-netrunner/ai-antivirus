@@ -5,6 +5,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -46,7 +47,16 @@ pub fn write_answer(out: &Path, answer: &Answer) -> Result<(), String> {
     let final_path = out.join(format!("{}.json", answer.alert_id));
     let tmp = out.join(format!(".{}.tmp", answer.alert_id));
     let text = serde_json::to_string(answer).map_err(|e| e.to_string())?;
-    let mut f = fs::File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    // 0660: the engine reads and removes it through the shared group (see the engine's spool for why the mode is explicit)
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o660)
+        .open(&tmp)
+        .map_err(|e| format!("{}: {e}", tmp.display()))?;
+    f.set_permissions(fs::Permissions::from_mode(0o660))
+        .map_err(|e| e.to_string())?;
     f.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
     f.sync_all().map_err(|e| e.to_string())?;
     fs::rename(&tmp, &final_path).map_err(|e| e.to_string())
@@ -237,6 +247,28 @@ mod tests {
         .unwrap();
         let ids: Vec<i64> = pending(&spool, &out).into_iter().map(|(i, _)| i).collect();
         assert_eq!(ids, [7, 10]);
+    }
+
+    #[test]
+    fn answers_are_group_readable_whatever_the_umask() {
+        let dir = tempfile::tempdir().unwrap();
+        write_answer(
+            dir.path(),
+            &Answer {
+                alert_id: 5,
+                ts_ns: 1,
+                model: "m".into(),
+                raw: Some("{}".into()),
+                error: None,
+            },
+        )
+        .unwrap();
+        let mode = fs::metadata(dir.path().join("5.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o660);
     }
 
     #[test]
