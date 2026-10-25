@@ -345,6 +345,16 @@ impl Config {
         self.paths.state_dir.join(DB_FILE_NAME)
     }
 
+    /// Bundles waiting for the AI analyzer (written by the engine, read by `synapse-ai`).
+    pub fn ai_spool_dir(&self) -> PathBuf {
+        self.paths.state_dir.join("ai").join("spool")
+    }
+
+    /// The analyzer's answers waiting for the engine (written by `synapse-ai`, read and removed by the engine).
+    pub fn ai_out_dir(&self) -> PathBuf {
+        self.paths.state_dir.join("ai").join("out")
+    }
+
     /// Where quarantined files are kept (never deleted automatically).
     pub fn quarantine_dir(&self) -> PathBuf {
         self.paths.state_dir.join("quarantine")
