@@ -57,6 +57,8 @@ str_enum! {
         Failed => "failed",
         Undone => "undone",
         Skipped => "skipped",
+        Pending => "pending",
+        Rejected => "rejected",
     }
 }
 

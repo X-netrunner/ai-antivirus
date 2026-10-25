@@ -17,13 +17,15 @@ use rusqlite::{params, Connection};
 
 use crate::error::{Error, Result};
 use crate::event::{Envelope, ProcKey, Sha256};
-use crate::model::{HashClass, Severity};
+use crate::model::{ActionStatus, HashClass, ProposalStatus, Severity};
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 const SCHEMA_V1: &str = include_str!("schema_v1.sql");
+const SCHEMA_V2: &str = include_str!("schema_v2.sql");
 
 /// Fixed table list used for statistics. Never built from outside input.
-const TABLES: [&str; 8] = [
+const TABLES: [&str; 9] = [
+    "state",
     "events",
     "alerts",
     "verdicts",
@@ -142,9 +144,14 @@ impl Store {
                 supported: SCHEMA_VERSION,
             });
         }
-        if found < 1 {
+        if found < SCHEMA_VERSION {
             let tx = self.conn.transaction()?;
-            tx.execute_batch(SCHEMA_V1)?;
+            if found < 1 {
+                tx.execute_batch(SCHEMA_V1)?;
+            }
+            if found < 2 {
+                tx.execute_batch(SCHEMA_V2)?;
+            }
             tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
             tx.commit()?;
         }
@@ -544,6 +551,219 @@ impl Store {
     }
 }
 
+/// A response action record (M4). `target` and `undo` are typed JSON owned by the responder.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActionRow {
+    pub id: i64,
+    pub ts_ns: u64,
+    pub alert_id: Option<i64>,
+    pub rule_id: Option<String>,
+    pub action: String,
+    pub level: u8,
+    pub target: serde_json::Value,
+    pub status: ActionStatus,
+    pub undo: Option<serde_json::Value>,
+    pub error: Option<String>,
+    pub decided_by: Option<String>,
+}
+
+/// An AI rule proposal (M5).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProposalRow {
+    pub id: i64,
+    pub ts_ns: u64,
+    pub source: String,
+    pub alert_id: Option<i64>,
+    pub rule: serde_json::Value,
+    pub status: ProposalStatus,
+    pub decided_by: Option<String>,
+    pub reason: Option<String>,
+}
+
+const ACTION_COLS: &str =
+    "id, ts_ns, alert_id, rule_id, action, level, target, status, undo, error, decided_by";
+
+fn action_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ActionRow> {
+    let target: String = r.get(6)?;
+    let status: String = r.get(7)?;
+    let undo: Option<String> = r.get(8)?;
+    Ok(ActionRow {
+        id: r.get(0)?,
+        ts_ns: u64::try_from(r.get::<_, i64>(1)?).unwrap_or(0),
+        alert_id: r.get(2)?,
+        rule_id: r.get(3)?,
+        action: r.get(4)?,
+        level: u8::try_from(r.get::<_, i64>(5)?).unwrap_or(0),
+        target: serde_json::from_str(&target).unwrap_or(serde_json::Value::Null),
+        // the CHECK constraint keeps this valid
+        status: status.parse().unwrap_or(ActionStatus::Failed),
+        undo: undo.and_then(|u| serde_json::from_str(&u).ok()),
+        error: r.get(9)?,
+        decided_by: r.get(10)?,
+    })
+}
+
+impl Store {
+    /// Record a new action and return its id.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_action(
+        &self,
+        ts_ns: u64,
+        alert_id: Option<i64>,
+        rule_id: Option<&str>,
+        action: &str,
+        level: u8,
+        target: &serde_json::Value,
+        status: ActionStatus,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO actions (ts_ns, alert_id, rule_id, action, level, target, status, updated_ns)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?1)",
+            params![to_i64(ts_ns, "ts_ns")?, alert_id, rule_id, action, i64::from(level), target.to_string(), status.as_str()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Change an action's status (and, when given, its undo data, error and who decided).
+    pub fn update_action(
+        &self,
+        id: i64,
+        status: ActionStatus,
+        undo: Option<&serde_json::Value>,
+        error: Option<&str>,
+        decided_by: Option<&str>,
+        now_ns: u64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE actions SET status = ?2,
+                 undo = COALESCE(?3, undo), error = ?4, decided_by = COALESCE(?5, decided_by), updated_ns = ?6
+             WHERE id = ?1",
+            params![id, status.as_str(), undo.map(ToString::to_string), error, decided_by, to_i64(now_ns, "updated_ns")?],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_action(&self, id: i64) -> Result<Option<ActionRow>> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT {ACTION_COLS} FROM actions WHERE id = ?1"))?;
+        let mut rows = stmt.query_map([id], action_row)?;
+        Ok(rows.next().transpose()?)
+    }
+
+    /// The newest `limit` actions, oldest first.
+    pub fn recent_actions(&self, limit: usize) -> Result<Vec<ActionRow>> {
+        let limit = i64::try_from(limit.min(MAX_RECENT)).unwrap_or(0);
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {ACTION_COLS} FROM actions ORDER BY id DESC LIMIT ?1"
+        ))?;
+        let mut out = stmt
+            .query_map([limit], action_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        out.reverse();
+        Ok(out)
+    }
+
+    /// Actions really executed since `since_ns` (the circuit breaker counts these).
+    pub fn executed_since(&self, since_ns: u64) -> Result<u64> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM actions WHERE status = 'executed' AND ts_ns >= ?1",
+            [to_i64(since_ns, "since_ns")?],
+            |r| r.get(0),
+        )?;
+        Ok(u64::try_from(n).unwrap_or(0))
+    }
+
+    pub fn state_get(&self, key: &str) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT value FROM state WHERE key = ?1")?;
+        let mut rows = stmt.query([key])?;
+        Ok(match rows.next()? {
+            Some(r) => Some(r.get(0)?),
+            None => None,
+        })
+    }
+
+    pub fn state_set(&self, key: &str, value: &str, now_ns: u64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO state (key, value, updated_ns) VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_ns = excluded.updated_ns",
+            params![key, value, to_i64(now_ns, "updated_ns")?],
+        )?;
+        Ok(())
+    }
+
+    pub fn state_delete(&self, key: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM state WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    /// Store an AI rule proposal (status pending, or auto_rejected with a reason).
+    pub fn insert_proposal(
+        &self,
+        ts_ns: u64,
+        source: &str,
+        alert_id: Option<i64>,
+        rule: &serde_json::Value,
+        status: ProposalStatus,
+        reason: Option<&str>,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO proposals (ts_ns, source, alert_id, rule, status, reason) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![to_i64(ts_ns, "ts_ns")?, source, alert_id, rule.to_string(), status.as_str(), reason],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn decide_proposal(
+        &self,
+        id: i64,
+        status: ProposalStatus,
+        by: &str,
+        reason: Option<&str>,
+        now_ns: u64,
+    ) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE proposals SET status = ?2, decided_by = ?3, reason = COALESCE(?4, reason), decided_ts_ns = ?5
+             WHERE id = ?1 AND status = 'pending'",
+            params![id, status.as_str(), by, reason, to_i64(now_ns, "decided_ts_ns")?],
+        )?;
+        Ok(n == 1)
+    }
+
+    pub fn proposals(&self, limit: usize) -> Result<Vec<ProposalRow>> {
+        let limit = i64::try_from(limit.min(MAX_RECENT)).unwrap_or(0);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, ts_ns, source, alert_id, rule, status, decided_by, reason FROM proposals ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit], |r| {
+            let rule: String = r.get(4)?;
+            let status: String = r.get(5)?;
+            Ok(ProposalRow {
+                id: r.get(0)?,
+                ts_ns: u64::try_from(r.get::<_, i64>(1)?).unwrap_or(0),
+                source: r.get(2)?,
+                alert_id: r.get(3)?,
+                rule: serde_json::from_str(&rule).unwrap_or(serde_json::Value::Null),
+                status: status.parse().unwrap_or(ProposalStatus::Rejected),
+                decided_by: r.get(6)?,
+                reason: r.get(7)?,
+            })
+        })?;
+        let mut out = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        out.reverse();
+        Ok(out)
+    }
+
+    /// Alerts newer than `after_id` (oldest first), for followers such as the notifier and the AI spool.
+    pub fn alerts_after(&self, after_id: i64, limit: usize) -> Result<Vec<AlertRow>> {
+        let all = self.recent_alerts(limit)?;
+        Ok(all.into_iter().filter(|a| a.id > after_id).collect())
+    }
+}
+
 fn to_i64(v: u64, what: &'static str) -> Result<i64> {
     i64::try_from(v).map_err(|_| Error::OutOfRange(what))
 }
@@ -561,6 +781,98 @@ fn pages_to_bytes(pages: i64, page_size: i64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_version_1_database_is_migrated_and_keeps_its_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.db");
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch("PRAGMA journal_mode = WAL;").unwrap();
+            c.execute_batch(SCHEMA_V1).unwrap();
+            c.execute_batch("PRAGMA user_version = 1;").unwrap();
+            c.execute(
+                "INSERT INTO actions (ts_ns, action, level, target, status) VALUES (5,'freeze',2,'{}','dry_run')",
+                [],
+            )
+            .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), 2);
+        let a = store.get_action(1).unwrap().unwrap();
+        assert_eq!(
+            (a.action.as_str(), a.status),
+            ("freeze", ActionStatus::DryRun)
+        );
+    }
+
+    #[test]
+    fn actions_state_and_proposals() {
+        let store = Store::open_in_memory().unwrap();
+        let t = serde_json::json!({"pid": 5});
+        let id = store
+            .insert_action(
+                10,
+                None,
+                Some("SYN-B-0001"),
+                "freeze",
+                2,
+                &t,
+                ActionStatus::Pending,
+            )
+            .unwrap();
+        store
+            .update_action(
+                id,
+                ActionStatus::Executed,
+                Some(&serde_json::json!({"cgroup": "/x"})),
+                None,
+                Some("root"),
+                11,
+            )
+            .unwrap();
+        let a = store.get_action(id).unwrap().unwrap();
+        assert_eq!(a.status, ActionStatus::Executed);
+        assert_eq!(a.undo.unwrap()["cgroup"], "/x");
+        assert_eq!(a.decided_by.as_deref(), Some("root"));
+        assert_eq!(store.executed_since(0).unwrap(), 1);
+        assert_eq!(store.executed_since(11).unwrap(), 0);
+        assert_eq!(store.recent_actions(5).unwrap().len(), 1);
+
+        assert!(store.state_get("breaker").unwrap().is_none());
+        store.state_set("breaker", "tripped", 1).unwrap();
+        store.state_set("breaker", "tripped again", 2).unwrap();
+        assert_eq!(
+            store.state_get("breaker").unwrap().as_deref(),
+            Some("tripped again")
+        );
+        store.state_delete("breaker").unwrap();
+        assert!(store.state_get("breaker").unwrap().is_none());
+
+        let p = store
+            .insert_proposal(
+                1,
+                "ai",
+                None,
+                &serde_json::json!({"id": "LOCAL-x"}),
+                ProposalStatus::Pending,
+                None,
+            )
+            .unwrap();
+        assert!(store
+            .decide_proposal(p, ProposalStatus::Approved, "root", None, 2)
+            .unwrap());
+        assert!(
+            !store
+                .decide_proposal(p, ProposalStatus::Rejected, "root", None, 3)
+                .unwrap(),
+            "decided once"
+        );
+        assert_eq!(
+            store.proposals(10).unwrap()[0].status,
+            ProposalStatus::Approved
+        );
+    }
 
     #[test]
     fn hashes_trust_cache_and_alert_reads() {
