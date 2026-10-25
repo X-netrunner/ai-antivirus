@@ -1,0 +1,13 @@
+# Install as /usr/share/libalpm/hooks/00-ai-antivirus-pre.hook
+# Before every transaction: AI Antivirus confirms it stays passive while pacman holds /var/lib/pacman/db.lck.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = *
+
+[Action]
+Description = AI Antivirus: pacman transaction starting (no destructive action until it ends)
+When = PreTransaction
+Exec = /usr/bin/ai-antivirus pacman-begin

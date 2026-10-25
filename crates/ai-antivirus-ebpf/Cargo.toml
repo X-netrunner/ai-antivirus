@@ -1,0 +1,48 @@
+[package]
+name = "ai-antivirus-ebpf"
+description = "AI Antivirus: kernel-side eBPF programs (fork, exec, exit, connect)"
+version = "0.3.0"
+edition = "2021"
+publish = false
+
+# This crate is built for the `bpfel-unknown-none` target with a nightly
+# toolchain (see rust-toolchain.toml and `cargo xtask build-ebpf`). The empty
+# [workspace] table keeps it out of the stable workspace one directory up.
+[workspace]
+
+[dependencies]
+# 0.1 is the API this code was written against. aya/aya-ebpf 0.14/0.2 exist;
+# upgrading both sides together is a separate change.
+aya-ebpf = "0.1"
+ai-antivirus-ebpf-common = { path = "../ai-antivirus-ebpf-common" }
+
+[[bin]]
+name = "ai-antivirus-ebpf"
+path = "src/main.rs"
+
+[profile.dev]
+opt-level = 3
+debug = 2
+overflow-checks = false
+panic = "abort"
+lto = true
+codegen-units = 1
+
+[profile.release]
+opt-level = 3
+debug = 2
+overflow-checks = false
+panic = "abort"
+lto = true
+codegen-units = 1
+
+# eBPF programs are unsafe by nature (every helper call is). The rule here is:
+# every unsafe block is small, sits in a named wrapper and carries a SAFETY
+# comment. No unwrap/expect (a panic in a BPF program is a verifier failure).
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+undocumented_unsafe_blocks = "deny"

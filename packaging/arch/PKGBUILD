@@ -1,13 +1,13 @@
 # Maintainer: the machine's owner
 #
-# Builds Synapse from the working tree this file sits in (packaging/arch/ inside the repository):
-#     cd packaging/arch && makepkg -f           # then: sudo pacman -U synapse-edr-*.pkg.tar.zst
+# Builds AI Antivirus from the working tree this file sits in (packaging/arch/ inside the repository):
+#     cd packaging/arch && makepkg -f           # then: sudo pacman -U ai-antivirus-*.pkg.tar.zst
 #
 # The user-space programs build with the stable or nightly Rust toolchain. The kernel-side eBPF object needs the
 # *nightly* toolchain with rust-src and `bpf-linker` (cargo install bpf-linker); build() tells you if either is missing.
-# If target/bpf/synapse-ebpf.o already exists in the tree it is used as it is.
-pkgname=synapse-edr
-pkgver=0.7.0
+# If target/bpf/ai-antivirus-ebpf.o already exists in the tree it is used as it is.
+pkgname=ai-antivirus
+pkgver=0.8.0
 pkgrel=1
 pkgdesc='AI-assisted EDR and antivirus for Arch Linux (alert-only by default)'
 arch=(x86_64)
@@ -16,12 +16,16 @@ license=(custom)   # none chosen yet; see the README
 depends=(glibc gcc-libs sqlite libarchive util-linux)
 makedepends=(rust clang)
 optdepends=(
-  'nftables: network blocks (synapse-responderd)'
-  'libnotify: desktop notifications (synapse-notify)'
-  'ollama: local model for the AI analyzer (synapse-ai)'
+  'nftables: network blocks (ai-antivirus-responderd)'
+  'libnotify: desktop notifications (ai-antivirus-notify)'
+  'ollama: local model for the AI analyzer (ai-antivirus-analyzer)'
 )
-backup=(etc/synapse/synapse.toml)
-install=synapse-edr.install
+backup=(etc/ai-antivirus/ai-antivirus.toml)
+install=ai-antivirus.install
+# Synapse was this project's old name
+replaces=(synapse-edr)
+conflicts=(synapse-edr)
+provides=(synapse-edr)
 options=(!lto)
 
 _root="$(cd "$startdir/../.." && pwd)"
@@ -36,9 +40,9 @@ build() {
   cd "$_root"
   export CARGO_TARGET_DIR="$srcdir/target"
   cargo build --release --frozen \
-    -p synapse-sensord -p synapse-engined -p synapse-responderd -p synapse-ai -p synapse-notify -p synapsectl
-  if [ ! -f target/bpf/synapse-ebpf.o ]; then
-    command -v bpf-linker >/dev/null || { echo "bpf-linker is missing (cargo install bpf-linker), or provide target/bpf/synapse-ebpf.o"; return 1; }
+    -p ai-antivirus-sensord -p ai-antivirus-engined -p ai-antivirus-responderd -p ai-antivirus-analyzer -p ai-antivirus-notify -p ai-antivirus
+  if [ ! -f target/bpf/ai-antivirus-ebpf.o ]; then
+    command -v bpf-linker >/dev/null || { echo "bpf-linker is missing (cargo install bpf-linker), or provide target/bpf/ai-antivirus-ebpf.o"; return 1; }
     unset CARGO_TARGET_DIR
     cargo xtask build-ebpf --release
   fi
@@ -47,28 +51,28 @@ build() {
 package() {
   cd "$_root"
   local t="$srcdir/target/release"
-  for b in synapse-sensord synapse-engined synapse-responderd synapse-ai synapse-notify synapsectl; do
+  for b in ai-antivirus-sensord ai-antivirus-engined ai-antivirus-responderd ai-antivirus-analyzer ai-antivirus-notify ai-antivirus; do
     install -Dm755 "$t/$b" "$pkgdir/usr/bin/$b"
   done
-  install -Dm644 target/bpf/synapse-ebpf.o "$pkgdir/usr/lib/synapse/synapse-ebpf.o"
-  install -Dm755 packaging/arch/pacman-post "$pkgdir/usr/lib/synapse/pacman-post"
+  install -Dm644 target/bpf/ai-antivirus-ebpf.o "$pkgdir/usr/lib/ai-antivirus/ai-antivirus-ebpf.o"
+  install -Dm755 packaging/arch/pacman-post "$pkgdir/usr/lib/ai-antivirus/pacman-post"
 
-  for u in sensord engined responderd ai; do
-    install -Dm644 "packaging/systemd/synapse-$u.service" "$pkgdir/usr/lib/systemd/system/synapse-$u.service"
+  for u in sensord engined responderd analyzer; do
+    install -Dm644 "packaging/systemd/ai-antivirus-$u.service" "$pkgdir/usr/lib/systemd/system/ai-antivirus-$u.service"
   done
-  install -Dm644 packaging/systemd/user/synapse-notify.service "$pkgdir/usr/lib/systemd/user/synapse-notify.service"
+  install -Dm644 packaging/systemd/user/ai-antivirus-notify.service "$pkgdir/usr/lib/systemd/user/ai-antivirus-notify.service"
 
-  install -Dm644 packaging/arch/synapse-sysusers.conf "$pkgdir/usr/lib/sysusers.d/synapse.conf"
-  install -Dm644 packaging/arch/synapse-tmpfiles.conf "$pkgdir/usr/lib/tmpfiles.d/synapse.conf"
-  install -Dm644 packaging/arch/00-synapse-pre.hook "$pkgdir/usr/share/libalpm/hooks/00-synapse-pre.hook"
-  install -Dm644 packaging/arch/zz-synapse-post.hook "$pkgdir/usr/share/libalpm/hooks/zz-synapse-post.hook"
+  install -Dm644 packaging/arch/ai-antivirus-sysusers.conf "$pkgdir/usr/lib/sysusers.d/ai-antivirus.conf"
+  install -Dm644 packaging/arch/ai-antivirus-tmpfiles.conf "$pkgdir/usr/lib/tmpfiles.d/ai-antivirus.conf"
+  install -Dm644 packaging/arch/00-ai-antivirus-pre.hook "$pkgdir/usr/share/libalpm/hooks/00-ai-antivirus-pre.hook"
+  install -Dm644 packaging/arch/zz-ai-antivirus-post.hook "$pkgdir/usr/share/libalpm/hooks/zz-ai-antivirus-post.hook"
 
-  install -Dm644 config/synapse.example.toml "$pkgdir/etc/synapse/synapse.toml"
+  install -Dm644 config/ai-antivirus.example.toml "$pkgdir/etc/ai-antivirus/ai-antivirus.toml"
 
-  # shipped rules: owned by the package, so a changed rule shows up in `pacman -Qkk` and in Synapse's own integrity check
-  install -Dm644 rules/behavior/00-shipped.toml "$pkgdir/etc/synapse/rules/behavior/00-shipped.toml"
+  # shipped rules: owned by the package, so a changed rule shows up in `pacman -Qkk` and in AI Antivirus's own integrity check
+  install -Dm644 rules/behavior/00-shipped.toml "$pkgdir/etc/ai-antivirus/rules/behavior/00-shipped.toml"
   for y in rules/yara/*.yar; do
-    install -Dm644 "$y" "$pkgdir/etc/synapse/rules/yara/$(basename "$y")"
+    install -Dm644 "$y" "$pkgdir/etc/ai-antivirus/rules/yara/$(basename "$y")"
   done
 
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"

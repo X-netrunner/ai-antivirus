@@ -1,0 +1,23 @@
+# Install as /usr/lib/systemd/user/ai-antivirus-notify.service, then as your user:
+#   sudo usermod -aG ai-antivirus-notify "$USER"     # log out and in once
+#   systemctl --user enable --now ai-antivirus-notify
+#
+# Shows the responder's notifications (alerts, what was done, what waits for approval) with notify-send (libnotify).
+
+[Unit]
+Description=AI Antivirus desktop notifications
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ai-antivirus-notify
+Restart=on-failure
+RestartSec=5
+# 3 = no access to the notification folder: the group is missing until you log in again, so restarting would only loop
+RestartPreventExitStatus=3
+NoNewPrivileges=yes
+PrivateNetwork=yes
+
+[Install]
+WantedBy=graphical-session.target

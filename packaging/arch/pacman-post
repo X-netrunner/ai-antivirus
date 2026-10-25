@@ -1,9 +1,9 @@
 #!/bin/sh
-# Install as /usr/lib/synapse/pacman-post (mode 0755). Called by zz-synapse-post.hook with the package names on stdin.
-# Runs the refresh as the unprivileged `synapse` user (it owns the database) and never fails the transaction.
-db=/var/lib/synapse/synapse.db
-if [ -f "$db" ] && id synapse >/dev/null 2>&1 && command -v runuser >/dev/null 2>&1; then
-    runuser -u synapse -- /usr/bin/synapsectl pacman-end || echo "synapse: trust cache not refreshed (run: synapsectl trust-baseline)" >&2
+# Install as /usr/lib/ai-antivirus/pacman-post (mode 0755). Called by zz-ai-antivirus-post.hook with the package names on stdin.
+# Runs the refresh as the unprivileged `ai-antivirus` user (it owns the database) and never fails the transaction.
+db=/var/lib/ai-antivirus/ai-antivirus.db
+if [ -f "$db" ] && id ai-antivirus >/dev/null 2>&1 && command -v runuser >/dev/null 2>&1; then
+    runuser -u ai-antivirus -- /usr/bin/ai-antivirus pacman-end || echo "ai-antivirus: trust cache not refreshed (run: ai-antivirus trust-baseline)" >&2
 else
     cat >/dev/null
 fi

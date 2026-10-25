@@ -1,0 +1,22 @@
+[package]
+name = "ai-antivirus-sensord"
+description = "AI Antivirus sensor daemon: eBPF process and network sensor (M2), /proc poller fallback, fanotify file-write sensor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+aya.workspace = true
+clap.workspace = true
+signal-hook.workspace = true
+ai-antivirus-common = { path = "../ai-antivirus-common" }
+ai-antivirus-ebpf-common = { path = "../ai-antivirus-ebpf-common" }
+ai-antivirus-sys = { path = "../ai-antivirus-sys" }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

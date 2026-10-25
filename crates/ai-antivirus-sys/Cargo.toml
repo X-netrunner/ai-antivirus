@@ -1,0 +1,20 @@
+[package]
+name = "ai-antivirus-sys"
+description = "AI Antivirus: the only crate with unsafe code (small, audited fanotify, pidfd and peer-credential FFI wrappers)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+libc.workspace = true
+
+# Not `workspace = true`: this crate may contain `unsafe` (denied by default,
+# allowed only on the few functions that carry a SAFETY comment).
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+undocumented_unsafe_blocks = "deny"

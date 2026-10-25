@@ -2,7 +2,7 @@
 //!
 //! They are compiled for `bpfel-unknown-none` with a nightly toolchain and
 //! linked with `bpf-linker`, none of which the stable workspace needs. The
-//! result is copied to `target/bpf/synapse-ebpf.o`, which is the file the
+//! result is copied to `target/bpf/ai-antivirus-ebpf.o`, which is the file the
 //! sensor loads (`sensors.ebpf_object`).
 
 use std::path::{Path, PathBuf};
@@ -55,7 +55,7 @@ fn bpf_arch() -> Result<&'static str, String> {
 
 fn build_ebpf(release: bool) -> Result<PathBuf, String> {
     let root = workspace_root();
-    let crate_dir = root.join("crates").join("synapse-ebpf");
+    let crate_dir = root.join("crates").join("ai-antivirus-ebpf");
 
     // Fail early, with the fix, when the toolchain is not there.
     if Command::new("bpf-linker")
@@ -87,6 +87,10 @@ fn build_ebpf(release: bool) -> Result<PathBuf, String> {
         .env_remove("RUSTFLAGS")
         .env_remove("RUSTC")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        // `cargo xtask` runs under the default toolchain and rustup passes it on in RUSTUP_TOOLCHAIN, which would
+        // override the crate's rust-toolchain.toml (nightly): the build then failed for want of build-std
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .env_remove("CARGO_TARGET_DIR")
         .env("CARGO_ENCODED_RUSTFLAGS", flags)
         .arg("build");
     if release {
@@ -106,11 +110,11 @@ fn build_ebpf(release: bool) -> Result<PathBuf, String> {
         .join("target")
         .join("bpfel-unknown-none")
         .join(profile)
-        .join("synapse-ebpf");
+        .join("ai-antivirus-ebpf");
     let out_dir = root.join("target").join("bpf");
     std::fs::create_dir_all(&out_dir)
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
-    let out = out_dir.join("synapse-ebpf.o");
+    let out = out_dir.join("ai-antivirus-ebpf.o");
     std::fs::copy(&built, &out)
         .map_err(|e| format!("cannot copy {} to {}: {e}", built.display(), out.display()))?;
     Ok(out)

@@ -1,0 +1,26 @@
+[package]
+name = "ai-antivirus-responderd"
+description = "AI Antivirus responder daemon: freeze, kill, quarantine, nftables block, with dry-run, approval, circuit breaker and undo (M4)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+clap.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+signal-hook.workspace = true
+ai-antivirus-common = { path = "../ai-antivirus-common" }
+ai-antivirus-rules = { path = "../ai-antivirus-rules" }
+ai-antivirus-sys = { path = "../ai-antivirus-sys" }
+tracing.workspace = true
+
+[dev-dependencies]
+flate2.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

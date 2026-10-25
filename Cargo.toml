@@ -1,24 +1,24 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/synapse-common",
-    "crates/synapse-ebpf-common",
-    "crates/synapse-sys",
-    "crates/synapse-sensord",
-    "crates/synapse-rules",
-    "crates/synapse-engined",
-    "crates/synapse-ai",
-    "crates/synapse-responderd",
-    "crates/synapse-notify",
-    "crates/synapsectl",
+    "crates/ai-antivirus-common",
+    "crates/ai-antivirus-ebpf-common",
+    "crates/ai-antivirus-sys",
+    "crates/ai-antivirus-sensord",
+    "crates/ai-antivirus-rules",
+    "crates/ai-antivirus-engined",
+    "crates/ai-antivirus-analyzer",
+    "crates/ai-antivirus-responderd",
+    "crates/ai-antivirus-notify",
+    "crates/ai-antivirus",
     "xtask",
 ]
 # Kernel-side eBPF programs: nightly, bpfel-unknown-none, own workspace.
 # Build them with `cargo xtask build-ebpf`.
-exclude = ["crates/synapse-ebpf"]
+exclude = ["crates/ai-antivirus-ebpf"]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.85"
 publish = false

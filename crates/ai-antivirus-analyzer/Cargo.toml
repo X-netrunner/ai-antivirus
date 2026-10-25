@@ -1,0 +1,25 @@
+[package]
+name = "ai-antivirus-analyzer"
+description = "AI Antivirus AI analyzer: advises on alerts through a local Ollama model and proposes rules; never acts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+clap.workspace = true
+libc.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+signal-hook.workspace = true
+ai-antivirus-common = { path = "../ai-antivirus-common" }
+ai-antivirus-rules = { path = "../ai-antivirus-rules" }
+tracing.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

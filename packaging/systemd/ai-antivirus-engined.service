@@ -1,0 +1,64 @@
+# Install as /usr/lib/systemd/system/ai-antivirus-engined.service
+#
+# M3 engine daemon: follows events.jsonl, runs pacman trust, the hash table, YARA-X and the behavior rules, and stores
+# alerts in /var/lib/ai-antivirus/ai-antivirus.db. It never acts on the system: ai-antivirus-responderd (M4) does, as the mode allows.
+#
+# Runs as the unprivileged `ai-antivirus` user with one capability, CAP_DAC_READ_SEARCH: it may READ any file, so it can
+# scan what lands in home directories (mode 0700 on Arch), e.g. ~/Downloads. Without it the engine never saw a download
+# (found in a live install on 2026-10-25). It cannot write outside its two state folders and has no network at all.
+#   * the rules in /etc/ai-antivirus/rules are root-owned (tmpfiles.d, and /etc/ai-antivirus is root-owned), so the engine reads but
+#     cannot change them.
+#
+# No MemoryDenyWriteExecute=: YARA-X compiles rule conditions to native code at load time (wasmtime), which needs
+# writable-then-executable memory.
+
+[Unit]
+Description=AI Antivirus engine daemon
+After=local-fs.target ai-antivirus-sensord.service
+Wants=ai-antivirus-sensord.service
+ConditionPathExists=/etc/ai-antivirus/ai-antivirus.toml
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=30
+TimeoutStartSec=90
+ExecStart=/usr/bin/ai-antivirus-engined --config /etc/ai-antivirus/ai-antivirus.toml
+Restart=always
+RestartSec=2
+User=ai-antivirus
+Group=ai-antivirus
+UMask=0077
+
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ai-antivirus /var/lib/ai-antivirus-analyzer
+SupplementaryGroups=ai-antivirus-analyzer
+ProtectHome=read-only
+PrivateTmp=no
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# default, not invisible: the engine runs as its own user and must read other users' /proc/<pid>/stat and cmdline (the
+# CPU check of AV-B-0015, and the parents of a process that started before the engine, for exceptions). That is what
+# every user can see anyway; environ, fd/ and the exe link still need ptrace rights, which the engine does not have.
+ProtectProc=default
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+# Traced under strace (rules, YARA-X, SQLite, AI hand-off, self-checks): every syscall is inside @system-service.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

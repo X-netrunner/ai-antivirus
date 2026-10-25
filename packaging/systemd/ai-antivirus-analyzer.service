@@ -1,0 +1,54 @@
+# Install as /usr/lib/systemd/system/ai-antivirus-analyzer.service
+#
+# M5 AI analyzer: reads alert bundles from /var/lib/ai-antivirus-analyzer/spool, asks the local Ollama, leaves the raw answer in
+# /var/lib/ai-antivirus-analyzer/out. Advice only. It cannot see the database or the event log (they are not in its folder and it
+# is not in their groups), runs no commands, and can only talk to localhost.
+# Enable only after setting [ai] enabled = true and a real model in /etc/ai-antivirus/ai-antivirus.toml.
+
+[Unit]
+Description=AI Antivirus AI analyzer (advice only)
+After=local-fs.target
+ConditionPathExists=/etc/ai-antivirus/ai-antivirus.toml
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ai-antivirus-analyzer --config /etc/ai-antivirus/ai-antivirus.toml
+Restart=on-failure
+RestartSec=10
+User=ai-antivirus-analyzer
+Group=ai-antivirus-analyzer
+UMask=0007
+
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadOnlyPaths=/var/lib/ai-antivirus-analyzer/spool
+ReadWritePaths=/var/lib/ai-antivirus-analyzer/out
+InaccessiblePaths=/var/lib/ai-antivirus /var/lib/ai-antivirus-private /var/log/ai-antivirus /run/ai-antivirus /home /root
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

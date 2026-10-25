@@ -1,0 +1,13 @@
+[package]
+name = "ai-antivirus-ebpf-common"
+description = "AI Antivirus: record layouts shared by the eBPF programs and the sensor daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# No dependencies on purpose: this crate is compiled both for the host and for
+# the `bpfel-unknown-none` target (by the `ai-antivirus-ebpf` crate).
+
+[lints]
+workspace = true

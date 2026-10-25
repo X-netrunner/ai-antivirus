@@ -1,0 +1,51 @@
+# Install scriptlet for ai-antivirus. Nothing is enabled or started: AI Antivirus ships in alert-only mode and turning it on is your decision.
+
+# Carry the settings of an installed Synapse (the old name) over, once, with its paths renamed.
+_migrate_synapse() {
+    local old new=/etc/ai-antivirus/ai-antivirus.toml
+    for old in /etc/synapse/synapse.toml.pacsave /etc/synapse/synapse.toml; do
+        [ -f "$old" ] || continue
+        [ -f "$new.from-synapse" ] && return 0
+        cp -a "$new" "$new.from-synapse" 2>/dev/null || true
+        sed -e 's#/var/lib/synapse-ai#/var/lib/ai-antivirus-analyzer#g' -e 's#synapse\.db#ai-antivirus.db#g' \
+            -e 's#synapse-ebpf#ai-antivirus-ebpf#g' -e 's#/synapse#/ai-antivirus#g' "$old" > "$new"
+        echo "  Settings carried over from $old (the package default is kept as $new.from-synapse)."
+        echo "  Old data stays in /var/lib/synapse and /var/log/synapse; run ai-antivirus trust-baseline again."
+        return 0
+    done
+}
+
+post_install() {
+    systemd-sysusers ai-antivirus.conf >/dev/null 2>&1 || true
+    systemd-tmpfiles --create ai-antivirus.conf >/dev/null 2>&1 || true
+    _migrate_synapse
+    cat <<'MSG'
+
+  AI Antivirus is installed but not running. To start it (alert-only: it records, notifies, and acts on nothing):
+
+    sudo systemctl enable --now ai-antivirus-sensord ai-antivirus-engined
+    sudo -u ai-antivirus ai-antivirus trust-baseline        # what pacman installed -> trust cache
+    sudo -u ai-antivirus ai-antivirus alerts                # what it found (the database is readable by ai-antivirus and root)
+
+  Later, optionally: ai-antivirus-responderd (acts on alerts, needs mode = 'contain' or 'enforce' in /etc/ai-antivirus/ai-antivirus.toml)
+  and ai-antivirus-analyzer (needs a local Ollama model and [ai] enabled = true). See /usr/share/doc/ai-antivirus/README.md.
+
+MSG
+}
+
+post_upgrade() {
+    systemd-sysusers ai-antivirus.conf >/dev/null 2>&1 || true
+    systemd-tmpfiles --create ai-antivirus.conf >/dev/null 2>&1 || true
+    echo "  AI Antivirus upgraded: restart the services that run (systemctl restart ai-antivirus-sensord ai-antivirus-engined ...). If you sign your rules, sign them again after the shipped rules changed: ai-antivirus rules-sign --key KEY"
+}
+
+pre_remove() {
+    for s in ai-antivirus-analyzer ai-antivirus-responderd ai-antivirus-engined ai-antivirus-sensord; do
+        systemctl disable --now "$s.service" >/dev/null 2>&1 || true
+    done
+}
+
+post_remove() {
+    echo "  Your exceptions (if you changed them) stay in /etc/ai-antivirus/exceptions.toml."
+    echo "  AI Antivirus's data stays in /var/lib/ai-antivirus, /var/lib/ai-antivirus-analyzer, /var/log/ai-antivirus and /var/lib/ai-antivirus-private (quarantined files and restore evidence). Remove them yourself when you are sure."
+}

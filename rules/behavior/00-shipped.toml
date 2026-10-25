@@ -1,22 +1,23 @@
-# Synapse shipped behavior rules (spec 7, layer L3). Format: see README "Behavior rules".
-# `action` is what synapse-responderd does with an alert, as far as general.mode allows. The default mode, alert-only,
+# AI Antivirus shipped behavior rules (spec 7, layer L3). Format: see README "Behavior rules".
+# `action` is what ai-antivirus-responderd does with an alert, as far as general.mode allows. The default mode, alert-only,
 # records the action as a dry run and notifies; levels above response.auto_levels_max (and 4+ always) wait for
-# `synapsectl approve`.
-# Not here yet, because the sensor does not report what they need: SYN-B-0007 (file reads), SYN-B-0009 (module loads),
-# SYN-B-0011 (ptrace). See README "M3: not done".
+# `ai-antivirus approve`.
+# Not here yet, because the sensor does not report what they need: AV-B-0007 (file reads), AV-B-0009 (module loads),
+# AV-B-0011 (ptrace). See README "M3: not done".
 
 [[rule]]
-id = 'SYN-B-0001'
+id = 'AV-B-0001'
 title = 'Shell with a socket as stdin (reverse shell)'
 severity = 'high'
 confidence = 0.9
-# pacman runs its hooks and install scriptlets with stdin on a socket.
+# pacman runs its hooks and install scriptlets with stdin on a socket. Network sockets only: editors' terminals and coding
+# agents give shells a Unix-domain socket as stdin, a reverse shell has a TCP or UDP one (and keeps it open).
 exclude_ancestor_exe = ['/usr/bin/pacman']
-match = { event = 'exec', exe_in = ['/usr/bin/bash', '/usr/bin/sh', '/usr/bin/dash', '/usr/bin/zsh', '/usr/bin/fish', '/usr/bin/ksh', '/usr/bin/mksh', '/usr/bin/busybox'], stdin_is_socket = true }
+match = { event = 'exec', exe_in = ['/usr/bin/bash', '/usr/bin/sh', '/usr/bin/dash', '/usr/bin/zsh', '/usr/bin/fish', '/usr/bin/ksh', '/usr/bin/mksh', '/usr/bin/busybox'], stdin_socket_network = true }
 action = 'freeze'
 
 [[rule]]
-id = 'SYN-B-0002'
+id = 'AV-B-0002'
 title = 'Download piped into a shell or interpreter (curl | sh)'
 severity = 'high'
 confidence = 0.7
@@ -24,7 +25,7 @@ match = { event = 'exec', exe_in = ['/usr/bin/bash', '/usr/bin/sh', '/usr/bin/da
 action = 'freeze'
 
 [[rule]]
-id = 'SYN-B-0003'
+id = 'AV-B-0003'
 title = 'Program executed from memory (memfd)'
 severity = 'high'
 confidence = 0.8
@@ -33,7 +34,7 @@ match = { event = 'exec', exe_prefix = ['/memfd:'] }
 action = 'freeze'
 
 [[rule]]
-id = 'SYN-B-0004'
+id = 'AV-B-0004'
 title = 'Write to /etc/ld.so.preload'
 severity = 'critical'
 confidence = 0.9
@@ -42,7 +43,7 @@ match = { event = 'file_write', path_in = ['/etc/ld.so.preload'] }
 action = 'freeze'
 
 [[rule]]
-id = 'SYN-B-0005'
+id = 'AV-B-0005'
 title = 'Service, timer or autostart entry written by a non-package process'
 severity = 'medium'
 confidence = 0.6
@@ -51,7 +52,7 @@ match = { event = 'file_write', path_prefix = ['/etc/systemd/system/', '/etc/sys
 action = 'notify'
 
 [[rule]]
-id = 'SYN-B-0006'
+id = 'AV-B-0006'
 title = 'SSH authorized_keys changed by a program other than an editor'
 severity = 'high'
 confidence = 0.7
@@ -60,7 +61,7 @@ match = { event = 'file_write', path_in = ['~/.ssh/authorized_keys', '~/.ssh/aut
 action = 'notify'
 
 [[rule]]
-id = 'SYN-B-0008'
+id = 'AV-B-0008'
 title = 'New setuid-root file outside a pacman transaction'
 severity = 'high'
 confidence = 0.8
@@ -69,7 +70,7 @@ match = { event = 'file_write', setuid_file = true, outside_pacman = true }
 action = 'quarantine'
 
 [[rule]]
-id = 'SYN-B-0010'
+id = 'AV-B-0010'
 title = 'Ransomware-like mass rewrite in a home directory'
 severity = 'critical'
 confidence = 0.8
@@ -83,7 +84,7 @@ match = { event = 'file_write', path_prefix = ['~/'], path_not_prefix = ['~/.cac
 action = 'freeze'
 
 [[rule]]
-id = 'SYN-B-0012'
+id = 'AV-B-0012'
 title = 'Connection to a common mining-pool port'
 severity = 'medium'
 confidence = 0.5
@@ -92,7 +93,17 @@ match = { event = 'connect', port_in = [3333, 3334, 4444, 5555, 7777, 9999, 1443
 action = 'notify'
 
 [[rule]]
-id = 'SYN-B-0013'
+id = 'AV-B-0015'
+title = 'Mining-pool connection from a process that keeps the CPU busy'
+severity = 'high'
+confidence = 0.8
+# The full spec rule: the AV-B-0012 port signal plus sustained CPU. The engine samples /proc/<pid>/stat at the connect
+# and again after cpu_window_secs, only for processes that matched the port half.
+match = { event = 'connect', port_in = [3333, 3334, 4444, 5555, 7777, 9999, 14433, 14444, 45560, 45700], min_cpu_percent = 60, cpu_window_secs = 60 }
+action = 'notify'
+
+[[rule]]
+id = 'AV-B-0013'
 title = 'Program executed from a world-writable temporary folder'
 severity = 'medium'
 confidence = 0.5
@@ -101,7 +112,7 @@ match = { event = 'exec', exe_prefix = ['/tmp/', '/dev/shm/', '/var/tmp/'] }
 action = 'notify'
 
 [[rule]]
-id = 'SYN-B-0014'
+id = 'AV-B-0014'
 title = 'Program executed from a deleted file'
 severity = 'high'
 confidence = 0.7
@@ -109,12 +120,12 @@ match = { event = 'exec', exe_suffix = [' (deleted)'] }
 action = 'freeze'
 
 [[rule]]
-id = 'SYN-B-0020'
-title = "Synapse's own files written outside a pacman transaction"
+id = 'AV-B-0020'
+title = "AI Antivirus's own files written outside a pacman transaction"
 severity = 'critical'
 confidence = 0.8
-# Synapse's programs, its configuration and rules (/etc/synapse), its units. Its own daemons write their state under
-# /var/lib/synapse (not covered here); the CLI writes rules when you approve one.
-exclude_exe = ['/usr/bin/pacman', '/usr/bin/synapsectl', '/usr/bin/systemctl', '/usr/lib/systemd/systemd']
-match = { event = 'file_write', path_prefix = ['/usr/lib/synapse/', '/etc/synapse/', '/usr/bin/synapse', '/usr/lib/systemd/system/synapse-', '/etc/systemd/system/synapse-'], outside_pacman = true }
+# AI Antivirus's programs, its configuration and rules (/etc/ai-antivirus), its units. Its own daemons write their state under
+# /var/lib/ai-antivirus (not covered here); the CLI writes rules when you approve one.
+exclude_exe = ['/usr/bin/pacman', '/usr/bin/ai-antivirus', '/usr/bin/systemctl', '/usr/lib/systemd/systemd']
+match = { event = 'file_write', path_prefix = ['/usr/lib/ai-antivirus/', '/etc/ai-antivirus/', '/usr/bin/ai-antivirus', '/usr/lib/systemd/system/ai-antivirus-', '/etc/systemd/system/ai-antivirus-'], outside_pacman = true }
 action = 'notify'
