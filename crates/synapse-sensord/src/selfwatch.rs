@@ -154,6 +154,7 @@ mod tests {
             cwd: "/".into(),
             cgroup: String::new(),
             stdio: Vec::new(),
+            lineage: Vec::new(),
         }
     }
 

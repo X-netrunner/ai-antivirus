@@ -34,6 +34,8 @@ use crate::sink::Sink;
 
 /// A live `/proc` entry counts as "the same process" within this start-time gap.
 const LIVE_TOLERANCE_NS: u64 = 50_000_000;
+/// How many ancestors an `exec` event carries.
+const LINEAGE_MAX: usize = 24;
 
 pub struct Translator {
     table: SharedTable,
@@ -103,7 +105,11 @@ impl Translator {
 
     fn exec_event(&self, view: &ExecView<'_>) -> Event {
         let pid = view.tgid;
-        let (proc, parent) = lock(&self.table).on_exec(pid, view.ts_boot_ns);
+        let (proc, parent, lineage) = {
+            let mut table = lock(&self.table);
+            let (proc, parent) = table.on_exec(pid, view.ts_boot_ns);
+            (proc, parent, table.ancestry(pid, LINEAGE_MAX))
+        };
 
         let mut exe = None;
         let mut cwd = None;
@@ -144,6 +150,7 @@ impl Translator {
             cwd: cwd.unwrap_or_default(),
             cgroup,
             stdio,
+            lineage,
         }
     }
 }

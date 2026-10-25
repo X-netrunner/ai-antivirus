@@ -54,6 +54,8 @@ pub struct Proc {
     pub uid: u32,
     pub parent: ProcKey,
     pub stdio: Vec<OsString>,
+    /// Ancestors as the sensor saw them, nearest first, including ones that only forked.
+    pub lineage: Vec<ProcKey>,
     pub exited_ns: Option<u64>,
 }
 
@@ -164,7 +166,17 @@ impl ProcTable {
 
     /// Executables above `key` (parent first), as far as the table knows them; at most 32 levels.
     pub fn ancestors(&self, key: ProcKey) -> Vec<&Path> {
-        let mut out = Vec::new();
+        let mut out: Vec<&Path> = Vec::new();
+        // the sensor's lineage covers ancestors that only forked (a script's subshells never exec, so no exec event
+        // describes them): skip the ones the table does not know and keep going to the programs that did exec
+        if let Some(p) = self.get(key) {
+            for k in &p.lineage {
+                if let Some(a) = self.get(*k) {
+                    out.push(a.exe.as_path());
+                }
+            }
+        }
+        // logs from before the lineage field existed, and the /proc poller, only have parent links
         let mut cur = key;
         for _ in 0..32 {
             let Some(p) = self.get(cur) else { break };
@@ -172,7 +184,9 @@ impl ProcTable {
                 break;
             }
             let Some(pp) = self.get(p.parent) else { break };
-            out.push(pp.exe.as_path());
+            if !out.contains(&pp.exe.as_path()) {
+                out.push(pp.exe.as_path());
+            }
             cur = p.parent;
         }
         out
@@ -220,6 +234,7 @@ mod tests {
             uid: 1000,
             parent: k(parent),
             stdio: stdio.iter().map(OsString::from).collect(),
+            lineage: Vec::new(),
             exited_ns: None,
         }
     }
@@ -267,6 +282,28 @@ mod tests {
             k(99),
             "unknown processes are their own tree"
         );
+    }
+
+    #[test]
+    fn ancestors_follow_the_sensors_lineage_across_subshells_that_never_exec() {
+        let mut t = ProcTable::default();
+        t.on_exec(k(10), proc("/usr/bin/pacman", 1, &[]), 0);
+        t.on_exec(k(11), proc("/usr/bin/bash", 10, &[]), 0); // the hook script
+                                                             // pid 12 and 13 are subshells: forked, never exec'd, so the table has no entry for them
+        let mut leaf = proc("/usr/bin/bash", 13, &["socket:[9]"]);
+        leaf.lineage = vec![k(13), k(12), k(11), k(10)];
+        t.on_exec(k(14), leaf, 0);
+        let names: Vec<_> = t
+            .ancestors(k(14))
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["/usr/bin/bash", "/usr/bin/pacman"]);
+        // without the lineage (an old log) the broken parent chain finds nothing
+        let mut old = proc("/usr/bin/bash", 13, &[]);
+        old.lineage = Vec::new();
+        t.on_exec(k(15), old, 0);
+        assert!(t.ancestors(k(15)).is_empty());
     }
 
     #[test]

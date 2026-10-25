@@ -76,8 +76,9 @@ confidence = 0.8
 scope = 'process_tree'
 window_secs = 10
 threshold = { distinct_files_written = 200, high_entropy_ratio = 0.7 }
-# Archivers, copy and sync tools legitimately write many compressed files quickly; so do Steam, Flatpak and caches.
-exclude_exe = ['/usr/bin/pacman', '/usr/bin/makepkg', '/usr/bin/rsync', '/usr/bin/cp', '/usr/bin/mv', '/usr/bin/tar', '/usr/bin/bsdtar', '/usr/bin/unzip', '/usr/bin/7z', '/usr/bin/7za', '/usr/bin/unrar', '/usr/bin/borg', '/usr/bin/restic', '/usr/bin/rclone', '/usr/bin/git', '/usr/bin/flatpak']
+# Archivers, compressors, copy and sync tools legitimately write many compressed files quickly (found by the VM soak: gzip over
+# 320 files); so do Steam, Flatpak and caches. gpg and openssl are deliberately NOT here: encrypting many files is what ransomware does.
+exclude_exe = ['/usr/bin/pacman', '/usr/bin/makepkg', '/usr/bin/rsync', '/usr/bin/cp', '/usr/bin/mv', '/usr/bin/tar', '/usr/bin/bsdtar', '/usr/bin/unzip', '/usr/bin/7z', '/usr/bin/7za', '/usr/bin/unrar', '/usr/bin/borg', '/usr/bin/restic', '/usr/bin/rclone', '/usr/bin/git', '/usr/bin/flatpak', '/usr/bin/gzip', '/usr/bin/pigz', '/usr/bin/bzip2', '/usr/bin/xz', '/usr/bin/zstd', '/usr/bin/lz4', '/usr/bin/zip']
 match = { event = 'file_write', path_prefix = ['~/'], path_not_prefix = ['~/.cache/', '~/.local/share/Steam/', '~/.steam/', '~/.var/app/', '~/.local/share/flatpak/', '~/.cargo/', '~/.rustup/', '~/.npm/', '~/.local/share/Trash/'] }
 action = 'freeze'
 

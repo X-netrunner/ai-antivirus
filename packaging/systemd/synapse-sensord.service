@@ -2,8 +2,6 @@
 #
 # M2 sensor daemon: eBPF process/network sensor (with /proc polling as fallback)
 # + fanotify file-write sensor -> events.jsonl.
-# Not yet in this unit (arrives with the milestone that needs it):
-#   * SystemCallFilter= (to be added after tracing the real syscall set, M7)
 #
 # The eBPF object must exist at /usr/lib/synapse/synapse-ebpf.o, owned by root
 # and not writable by group or others (the sensor refuses it otherwise).
@@ -48,6 +46,9 @@ RestrictRealtime=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
+# Traced under strace while every sensor feature ran: all of its syscalls are in @system-service except these four.
+SystemCallFilter=@system-service bpf perf_event_open fanotify_init fanotify_mark
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target

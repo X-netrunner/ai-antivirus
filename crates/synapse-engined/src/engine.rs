@@ -164,6 +164,7 @@ impl Engine {
                 exe,
                 argv,
                 stdio,
+                lineage,
                 ..
             } => {
                 let p = Proc {
@@ -172,6 +173,7 @@ impl Engine {
                     uid: *uid,
                     parent: *parent,
                     stdio: stdio.clone(),
+                    lineage: lineage.clone(),
                     exited_ns: None,
                 };
                 self.procs.on_exec(*proc, p, env.ts_ns);
@@ -194,6 +196,7 @@ impl Engine {
                 exe,
                 argv,
                 stdio,
+                lineage,
                 ..
             } => {
                 let p = Proc {
@@ -202,6 +205,7 @@ impl Engine {
                     uid: *uid,
                     parent: *parent,
                     stdio: stdio.clone(),
+                    lineage: lineage.clone(),
                     exited_ns: None,
                 };
                 let waiting_reader = self.procs.on_exec(*proc, p, ts);

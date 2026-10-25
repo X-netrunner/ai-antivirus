@@ -2,7 +2,6 @@
 #
 # M3 engine daemon: follows events.jsonl, runs pacman trust, the hash table, YARA-X and the behavior rules, and stores
 # alerts in /var/lib/synapse/synapse.db. It never acts on the system: synapse-responderd (M4) does, as the mode allows.
-# Not yet in this unit: SystemCallFilter= (after tracing the real syscall set).
 #
 # Runs as the unprivileged `synapse` user with no capabilities (spec 4). Consequences:
 #   * it can only scan files `synapse` may read: system binaries, world-readable files in /tmp, /dev/shm, /var/tmp;
@@ -54,6 +53,9 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 SystemCallArchitectures=native
+# Traced under strace (rules, YARA-X, SQLite, AI hand-off, self-checks): every syscall is inside @system-service.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target

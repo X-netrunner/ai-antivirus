@@ -2,6 +2,32 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow milestones until 1.0.
 
+## [0.7.0] - M6 self-protection and M7 packaging (unreleased)
+
+### Added
+- M6: systemd readiness and watchdog heartbeats (`synapse-common::notify`) in the sensor, engine and responder; their units are `Type=notify` with `WatchdogSec=30`.
+- M6: signed rule bundles (ed25519): `synapsectl keygen`, `rules-sign`, `rules-verify`; `engine.require_signed_rules`, `engine.rules_pubkey`. Verified at start and on every reload; a failed reload keeps the running rules and raises `SYN-T-0004`. `approve-rule --key` signs again.
+- M6: engine self-checks: own binaries against pacman's records (`SYN-T-0001`, offers `restore`), debugger on the engine (`SYN-T-0002`), silent sensor (`SYN-T-0003`), `Tamper` events from the sensor become alerts (`SYN-T-0010`..`0013`). Shipped rule `SYN-B-0020` (writes to Synapse's own files outside pacman). Config `engine.self_check_files`.
+- M6: sensor self-watch: a canary exec every 60 s checks that the eBPF stream still reports, and a restart (through systemd) re-attaches the probes when it does not; debugger check on the sensor.
+- M6: the `restore` action in the responder (level 6, always needs approval): pacman-owned files from the pacman cache, verified against the package's `mtree`, evidence kept, undo.
+- M7: `packaging/arch/PKGBUILD`, `synapse-edr.install`, pacman hooks `00-synapse-pre` and `zz-synapse-post` (+ `/usr/lib/synapse/pacman-post`), `synapsectl pacman-begin`, `pacman-end`, `scan-pkgbuild`.
+- Config: `paths.private_dir`.
+- M8: `SystemCallFilter=` in the sensor, engine and responder units (traced under `strace`; the sensor adds `bpf perf_event_open fanotify_init fanotify_mark` to `@system-service`), `SystemCallErrorNumber=EPERM` in all four.
+- M8: `lineage` on `exec` events (the sensor's chain of ancestors, including processes that only forked); the engine's `exclude_ancestor_exe` follows it.
+- M8: seeded mutation tests for the rule parser, the `mtree` reader, the analyzer's answer validator and extractors, the control-socket request parser and event-log lines; pipeline regression tests for both soak findings.
+
+### Changed
+- Rules now live in `/etc/synapse/rules` (was `/var/lib/synapse/rules`), the benign-activity recording in `/etc/synapse/corpus/`, quarantine and restore evidence in `/var/lib/synapse-private` (was inside `/var/lib/synapse`). Root-owned folders no longer sit inside a folder owned by an unprivileged user (found by installing the package in a VM: `systemd-tmpfiles` refused the layout, rightly).
+- The responder unit no longer sets `ProtectSystem=` (restore writes under `/usr` and `/etc`).
+- `Event::Tamper` is turned into an alert by the engine. Duplicate suppression for file findings includes the file's hash.
+- Workspace version 0.7.0.
+
+### Fixed
+- The sensor hung instead of exiting when it asked for a restart (its threads were never told to stop).
+- Restore did not set the modification time, so `pacman -Qkk` still complained.
+- The AI hand-off files were created with the services' umask and were unreadable for the other service; they now get explicit modes.
+- Soak: `SYN-B-0001` fired on `ldd` run by pacman hooks through subshells (the ancestor trail was broken; fixed by `lineage`); `SYN-B-0010` fired on `gzip` over hundreds of files (compressors are now excluded, `gpg` and `openssl` are not).
+
 ## [0.6.0] - M5: AI analyzer (unreleased)
 
 ### Added

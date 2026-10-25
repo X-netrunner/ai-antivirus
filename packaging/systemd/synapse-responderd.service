@@ -3,7 +3,6 @@
 # M4 responder daemon: follows the alerts in /var/lib/synapse/synapse.db and acts on them as the mode allows
 # (general.mode, response.*). Shipped config is alert-only: it only records what it would do and notifies.
 # Control socket: /run/synapse/responder.sock (root only, checked with SO_PEERCRED) for synapsectl approve/reject/undo.
-# Not yet in this unit: SystemCallFilter= (after tracing the real syscall set).
 #
 # Runs as root with only the capabilities it uses:
 #   CAP_KILL                 signal other users' processes (pidfd SIGKILL when cgroup v2 is missing)
@@ -58,6 +57,9 @@ RestrictRealtime=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
+# Traced under strace while it froze, killed, quarantined, blocked, restored and undid: every syscall is inside @system-service.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target

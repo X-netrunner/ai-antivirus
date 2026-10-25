@@ -88,6 +88,7 @@ impl Poller {
                         cwd: info.cwd,
                         cgroup: info.cgroup,
                         stdio: info.stdio,
+                        lineage: Vec::new(),
                     });
                     current.insert(pid, (key, true));
                 }

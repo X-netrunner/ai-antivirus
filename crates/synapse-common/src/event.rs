@@ -331,6 +331,12 @@ pub enum Event {
             with = "os_serde::string_vec"
         )]
         stdio: Vec<OsString>,
+        /// The process's ancestors as the sensor's process table knows them, nearest first (parent, grandparent ...), up to
+        /// 24. Includes processes that only forked and never exec'd (the subshells of a script), which no `exec` event
+        /// describes, so the engine can still follow the chain to the program that started them. Added in M8; older logs
+        /// omit it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        lineage: Vec<ProcKey>,
     },
     Exit {
         proc: ProcKey,
@@ -473,6 +479,54 @@ mod tests {
         assert!(json.contains("\"boot_id\":\"00112233445566778899aabbccddeeff\""));
     }
 
+    /// Mutated event-log lines never panic the parser, and any that still parse survive a round trip.
+    #[test]
+    fn mutated_event_log_lines_never_panic() {
+        let mut state: u64 = 0x5EED_1234_ABCD_9876;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut parsed = 0u32;
+        for (n, event) in crate::testutil::all_event_variants()
+            .into_iter()
+            .enumerate()
+        {
+            let env = Envelope {
+                seq: n as u64,
+                ts_ns: 1,
+                boot_id: BootId(7),
+                event,
+            };
+            let line = serde_json::to_vec(&env).unwrap();
+            for _ in 0..3_000 {
+                let mut b = line.clone();
+                for _ in 0..1 + (next() % 3) as usize {
+                    let at = (next() % b.len().max(1) as u64) as usize;
+                    match next() % 4 {
+                        0 => b[at] ^= 1 << (next() % 8),
+                        1 => {
+                            b.remove(at);
+                        }
+                        2 => b.insert(at, (next() & 0xff) as u8),
+                        _ => b.truncate(at),
+                    }
+                    if b.is_empty() {
+                        b.push(b'{');
+                    }
+                }
+                if let Ok(back) = serde_json::from_slice::<Envelope>(&b) {
+                    parsed += 1;
+                    let again = serde_json::to_vec(&back).unwrap();
+                    assert_eq!(serde_json::from_slice::<Envelope>(&again).unwrap(), back);
+                }
+            }
+        }
+        assert!(parsed > 0);
+    }
+
     #[test]
     fn exec_without_stdio_from_an_m2_log_still_parses() {
         let line = r#"{"type":"exec","proc":{"pid":5,"start_ns":9},"parent":{"pid":1,"start_ns":1},"uid":0,"exe":"/usr/bin/sh","argv":["sh"],"cwd":"/","cgroup":""}"#;
@@ -500,6 +554,7 @@ mod tests {
             cwd: PathBuf::from("/"),
             cgroup: String::new(),
             stdio: Vec::new(),
+            lineage: Vec::new(),
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains(r#"{"hex":"2f746d702ffffe"}"#));

@@ -118,6 +118,7 @@ pub fn describe(event: &Event) -> String {
             cwd,
             cgroup,
             stdio,
+            ..
         } => format!(
             "exec          {proc} ppid={} uid={uid} exe={} cwd={} cgroup={}{} cmd={}",
             parent.pid,
@@ -239,6 +240,7 @@ mod tests {
             cwd: PathBuf::from("/tmp"),
             cgroup: "/a.slice".to_owned(),
             stdio: vec![OsString::from("socket:[7]")],
+            lineage: Vec::new(),
         };
         let line = describe(&event);
         assert!(!line.contains('\x1b'));

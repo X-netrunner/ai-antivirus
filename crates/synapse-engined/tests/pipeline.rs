@@ -69,6 +69,7 @@ impl Rig {
                 cwd: PathBuf::from("/home/u"),
                 cgroup: String::new(),
                 stdio: stdio.iter().map(OsString::from).collect(),
+                lineage: Vec::new(),
             },
         )
     }
@@ -156,6 +157,45 @@ fn pacman_hooks_with_a_socket_stdin_are_not_reverse_shells() {
             &["socket:[9]"]
         )
         .is_empty());
+}
+
+#[test]
+fn a_hook_script_that_runs_ldd_through_subshells_is_still_under_pacman() {
+    // seen in the VM soak: mkinitcpio, run by a pacman hook, runs `ldd` (a bash script) from forked subshells with a
+    // socket as stdin; the subshells never exec, so only the sensor's lineage connects `ldd` to pacman
+    let mut r = Rig::new();
+    r.exec(
+        S,
+        820,
+        1,
+        "/usr/bin/pacman",
+        &["pacman", "-Syu"],
+        &["/dev/pts/0"],
+    );
+    r.exec(
+        2 * S,
+        821,
+        820,
+        "/usr/bin/bash",
+        &["/usr/share/libalpm/scripts/mkinitcpio-install"],
+        &["socket:[9]"],
+    );
+    let with_lineage = |pid: u32, ppid: u32, lineage: Vec<u32>| Event::Exec {
+        proc: k(pid),
+        parent: k(ppid),
+        uid: 0,
+        exe: PathBuf::from("/usr/bin/bash"),
+        argv: vec![OsString::from("ldd"), OsString::from("/usr/bin/mount")],
+        cwd: PathBuf::from("/"),
+        cgroup: String::new(),
+        stdio: vec![OsString::from("socket:[9]")],
+        lineage: lineage.into_iter().map(k).collect(),
+    };
+    let a = r.feed(3 * S, with_lineage(822, 830, vec![830, 829, 821, 820]));
+    assert!(a.is_empty(), "{a:?}");
+    // the same exec with no lineage (an old log) is what the soak flagged
+    let a = r.feed(4 * S, with_lineage(823, 830, Vec::new()));
+    assert_eq!(ids(&a), ["SYN-B-0001"]);
 }
 
 #[test]
@@ -439,6 +479,38 @@ fn tamper_events_from_the_sensor_become_alerts() {
             }
         )
         .is_empty());
+}
+
+#[test]
+fn bulk_compression_is_quiet_but_bulk_encryption_is_not() {
+    // found by the VM soak: gzip over 320 files looked like ransomware
+    let mut r = Rig::new();
+    r.exec(S, 950, 1, "/usr/bin/fish", &["fish"], &[]);
+    r.exec(S, 951, 950, "/usr/bin/gzip", &["gzip", "logs/a.txt"], &[]);
+    for i in 0..320u64 {
+        let a = r.write(
+            2 * S + i * S / 100,
+            951,
+            &format!("/home/u/logs/log{i}.txt.gz"),
+            Some(7900),
+        );
+        assert!(a.is_empty(), "gzip: {a:?}");
+    }
+    r.exec(S, 960, 950, "/usr/bin/gpg", &["gpg", "-c"], &[]);
+    let mut fired = Vec::new();
+    for i in 0..320u64 {
+        fired.extend(r.write(
+            20 * S + i * S / 100,
+            960,
+            &format!("/home/u/Documents/d{i}.gpg"),
+            Some(7990),
+        ));
+    }
+    assert_eq!(
+        ids(&fired),
+        ["SYN-B-0010"],
+        "encrypting hundreds of files is still caught"
+    );
 }
 
 #[test]
