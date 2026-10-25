@@ -57,7 +57,10 @@ pub struct Yara {
 
 impl std::fmt::Debug for Yara {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Yara").field("files", &self.files).field("timeout", &self.timeout).finish()
+        f.debug_struct("Yara")
+            .field("files", &self.files)
+            .field("timeout", &self.timeout)
+            .finish()
     }
 }
 
@@ -90,29 +93,47 @@ impl Yara {
         for f in &files {
             let meta = fs::metadata(f).map_err(|e| Error::io(f, e))?;
             if meta.len() > MAX_YARA_FILE_BYTES {
-                problems.push(format!("{}: larger than {MAX_YARA_FILE_BYTES} bytes", f.display()));
+                problems.push(format!(
+                    "{}: larger than {MAX_YARA_FILE_BYTES} bytes",
+                    f.display()
+                ));
                 continue;
             }
             let src = fs::read_to_string(f).map_err(|e| Error::io(f, e))?;
             let ns: String = f
                 .file_stem()
-                .map(|s| s.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect())
+                .map(|s| {
+                    s.to_string_lossy()
+                        .chars()
+                        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                        .collect()
+                })
                 .unwrap_or_else(|| "rules".into());
             compiler.new_namespace(&ns);
-            if let Err(e) = compiler.add_source(yara_x::SourceCode::from(src.as_str()).with_origin(f.display().to_string())) {
+            if let Err(e) = compiler.add_source(
+                yara_x::SourceCode::from(src.as_str()).with_origin(f.display().to_string()),
+            ) {
                 problems.push(e.to_string());
             }
         }
         if !problems.is_empty() {
             return Err(Error::Rules(problems));
         }
-        Ok(Yara { rules: compiler.build(), files, timeout })
+        Ok(Yara {
+            rules: compiler.build(),
+            files,
+            timeout,
+        })
     }
 
     /// Compile one source string (tests, `synapsectl rules`).
     pub fn from_source(src: &str, timeout: Duration) -> Result<Yara> {
         let rules = yara_x::compile(src).map_err(|e| Error::Rules(vec![e.to_string()]))?;
-        Ok(Yara { rules, files: Vec::new(), timeout })
+        Ok(Yara {
+            rules,
+            files: Vec::new(),
+            timeout,
+        })
     }
 
     pub fn files(&self) -> &[PathBuf] {
@@ -144,7 +165,8 @@ impl Yara {
     /// Read an open file (already checked by `open_regular`) and scan it.
     pub fn scan_file(&self, mut file: &File, len: u64) -> Result<Vec<YaraHit>> {
         let mut data = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
-        file.read_to_end(&mut data).map_err(|e| Error::Scan(e.to_string()))?;
+        file.read_to_end(&mut data)
+            .map_err(|e| Error::Scan(e.to_string()))?;
         self.scan_bytes(&data)
     }
 }
@@ -183,8 +205,15 @@ rule eicar_test_file {
         fs::write(dir.path().join("eicar.yar"), EICAR_RULE).unwrap();
         let y = Yara::load_dir(dir.path(), Duration::from_secs(5)).unwrap();
         assert_eq!(y.scan_bytes(EICAR).unwrap()[0].namespace, "eicar");
-        fs::write(dir.path().join("broken.yar"), "rule x { condition: nonsense_identifier }").unwrap();
-        assert!(matches!(Yara::load_dir(dir.path(), Duration::from_secs(5)), Err(Error::Rules(_))));
+        fs::write(
+            dir.path().join("broken.yar"),
+            "rule x { condition: nonsense_identifier }",
+        )
+        .unwrap();
+        assert!(matches!(
+            Yara::load_dir(dir.path(), Duration::from_secs(5)),
+            Err(Error::Rules(_))
+        ));
     }
 
     #[test]
@@ -199,8 +228,14 @@ rule eicar_test_file {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         assert!(open_regular(&p, 2).unwrap().is_none(), "too large");
-        assert!(open_regular(dir.path(), 1024).unwrap().is_none(), "a directory");
+        assert!(
+            open_regular(dir.path(), 1024).unwrap().is_none(),
+            "a directory"
+        );
         std::os::unix::fs::symlink(&p, dir.path().join("link")).unwrap();
-        assert!(open_regular(&dir.path().join("link"), 1024).is_err(), "symlinks are not followed");
+        assert!(
+            open_regular(&dir.path().join("link"), 1024).is_err(),
+            "symlinks are not followed"
+        );
     }
 }

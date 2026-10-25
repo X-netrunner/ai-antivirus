@@ -47,7 +47,9 @@ pub fn local_packages(local: &Path) -> Result<Vec<LocalPackage>> {
         if !entry.file_type().is_ok_and(|t| t.is_dir()) {
             continue;
         }
-        let Ok(desc) = fs::read_to_string(dir.join("desc")) else { continue };
+        let Ok(desc) = fs::read_to_string(dir.join("desc")) else {
+            continue;
+        };
         let mut lines = desc.lines();
         let name = loop {
             match lines.next() {
@@ -80,7 +82,9 @@ fn unescape(s: &str) -> Option<Vec<u8>> {
             if !oct.iter().all(|c| (b'0'..=b'7').contains(c)) {
                 return None;
             }
-            let v = oct.iter().fold(0u32, |acc, c| acc * 8 + u32::from(c - b'0'));
+            let v = oct
+                .iter()
+                .fold(0u32, |acc, c| acc * 8 + u32::from(c - b'0'));
             out.push(u8::try_from(v).ok()?);
             i += 4;
         } else {
@@ -115,13 +119,17 @@ pub fn parse_mtree<R: BufRead>(reader: R) -> Result<Vec<MtreeEntry>> {
         if first.starts_with('/') {
             continue; // /unset and other directives
         }
-        let Some(rel) = first.strip_prefix("./") else { continue };
+        let Some(rel) = first.strip_prefix("./") else {
+            continue;
+        };
         if rel.starts_with('.') && !rel.contains('/') {
             continue;
         }
         let (mut kind, mut size, mut time, mut sha) = (defaults_type.clone(), None, None, None);
         for kv in fields {
-            let Some((k, v)) = kv.split_once('=') else { continue };
+            let Some((k, v)) = kv.split_once('=') else {
+                continue;
+            };
             match k {
                 "type" => kind = v.to_owned(),
                 "size" => size = v.parse::<u64>().ok(),
@@ -133,13 +141,22 @@ pub fn parse_mtree<R: BufRead>(reader: R) -> Result<Vec<MtreeEntry>> {
         if kind != "file" {
             continue;
         }
-        let (Some(size), Some(mtime_s), Some(sha256)) = (size, time, sha) else { continue };
+        let (Some(size), Some(mtime_s), Some(sha256)) = (size, time, sha) else {
+            continue;
+        };
         let Some(bytes) = unescape(rel) else { continue };
         let mut path = b"/".to_vec();
         path.extend_from_slice(&bytes);
-        out.push(MtreeEntry { path: PathBuf::from(std::ffi::OsString::from_vec(path)), size, mtime_s, sha256 });
+        out.push(MtreeEntry {
+            path: PathBuf::from(std::ffi::OsString::from_vec(path)),
+            size,
+            mtime_s,
+            sha256,
+        });
         if out.len() > MAX_ENTRIES_PER_PACKAGE {
-            return Err(Error::Mtree(format!("more than {MAX_ENTRIES_PER_PACKAGE} entries")));
+            return Err(Error::Mtree(format!(
+                "more than {MAX_ENTRIES_PER_PACKAGE} entries"
+            )));
         }
     }
     Ok(out)
@@ -201,7 +218,10 @@ mod tests {
         let pkg = dir.path().join("bash-5.3-1");
         fs::create_dir(&pkg).unwrap();
         fs::write(pkg.join("desc"), "%NAME%\nbash\n\n%VERSION%\n5.3-1\n").unwrap();
-        let mut gz = GzEncoder::new(File::create(pkg.join("mtree")).unwrap(), flate2::Compression::default());
+        let mut gz = GzEncoder::new(
+            File::create(pkg.join("mtree")).unwrap(),
+            flate2::Compression::default(),
+        );
         gz.write_all(SAMPLE.as_bytes()).unwrap();
         gz.finish().unwrap();
         fs::create_dir(dir.path().join("broken-1-1")).unwrap(); // no desc: ignored

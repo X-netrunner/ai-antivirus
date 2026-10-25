@@ -1,0 +1,104 @@
+# Synapse shipped behavior rules (spec 7, layer L3). Format: see README "Behavior rules".
+# Default mode is alert-only: `action` is what the responder WOULD do from M4 on; until then it is only recorded.
+# Not here yet, because the sensor does not report what they need: SYN-B-0007 (file reads), SYN-B-0009 (module loads),
+# SYN-B-0011 (ptrace). See README "M3: not done".
+
+[[rule]]
+id = 'SYN-B-0001'
+title = 'Shell with a socket as stdin (reverse shell)'
+severity = 'high'
+confidence = 0.9
+match = { event = 'exec', exe_in = ['/usr/bin/bash', '/usr/bin/sh', '/usr/bin/dash', '/usr/bin/zsh', '/usr/bin/fish', '/usr/bin/ksh', '/usr/bin/mksh', '/usr/bin/busybox'], stdin_is_socket = true }
+action = 'freeze'
+
+[[rule]]
+id = 'SYN-B-0002'
+title = 'Download piped into a shell or interpreter (curl | sh)'
+severity = 'high'
+confidence = 0.7
+match = { event = 'exec', exe_in = ['/usr/bin/bash', '/usr/bin/sh', '/usr/bin/dash', '/usr/bin/zsh', '/usr/bin/fish', '/usr/bin/python3', '/usr/bin/perl', '/usr/bin/ruby', '/usr/bin/node'], stdin_from_exe_in = ['/usr/bin/curl', '/usr/bin/wget', '/usr/bin/wget2', '/usr/bin/aria2c'] }
+action = 'freeze'
+
+[[rule]]
+id = 'SYN-B-0003'
+title = 'Program executed from memory (memfd)'
+severity = 'high'
+confidence = 0.8
+# Known benign: runc / Docker re-executes itself from a memfd ("/memfd:runc_cloned..."). Add a LOCAL- override rule if you use it.
+match = { event = 'exec', exe_prefix = ['/memfd:'] }
+action = 'freeze'
+
+[[rule]]
+id = 'SYN-B-0004'
+title = 'Write to /etc/ld.so.preload'
+severity = 'critical'
+confidence = 0.9
+exclude_exe = ['/usr/bin/pacman']
+match = { event = 'file_write', path_in = ['/etc/ld.so.preload'] }
+action = 'freeze'
+
+[[rule]]
+id = 'SYN-B-0005'
+title = 'Service, timer or autostart entry written by a non-package process'
+severity = 'medium'
+confidence = 0.6
+exclude_exe = ['/usr/bin/pacman', '/usr/bin/systemctl', '/usr/lib/systemd/systemd']
+match = { event = 'file_write', path_prefix = ['/etc/systemd/system/', '/etc/systemd/user/', '/usr/lib/systemd/system/', '/usr/lib/systemd/user/', '~/.config/systemd/user/', '~/.config/autostart/', '/etc/xdg/autostart/', '/etc/cron.d/', '/etc/cron.daily/', '/etc/cron.hourly/', '/var/spool/cron/'], outside_pacman = true }
+action = 'notify'
+
+[[rule]]
+id = 'SYN-B-0006'
+title = 'SSH authorized_keys changed by a program other than an editor'
+severity = 'high'
+confidence = 0.7
+exclude_exe = ['/usr/bin/vim', '/usr/bin/nvim', '/usr/bin/vi', '/usr/bin/nano', '/usr/bin/emacs', '/usr/bin/micro', '/usr/bin/helix', '/usr/bin/hx', '/usr/bin/kate', '/usr/bin/gedit', '/usr/bin/gnome-text-editor', '/usr/bin/mousepad', '/usr/bin/code', '/usr/bin/codium', '/usr/bin/zed']
+match = { event = 'file_write', path_in = ['~/.ssh/authorized_keys', '~/.ssh/authorized_keys2', '/etc/ssh/authorized_keys'] }
+action = 'notify'
+
+[[rule]]
+id = 'SYN-B-0008'
+title = 'New setuid-root file outside a pacman transaction'
+severity = 'high'
+confidence = 0.8
+exclude_exe = ['/usr/bin/pacman']
+match = { event = 'file_write', setuid_file = true, outside_pacman = true }
+action = 'quarantine'
+
+[[rule]]
+id = 'SYN-B-0010'
+title = 'Ransomware-like mass rewrite in a home directory'
+severity = 'critical'
+confidence = 0.8
+scope = 'process_tree'
+window_secs = 10
+threshold = { distinct_files_written = 200, high_entropy_ratio = 0.7 }
+# Archivers, copy and sync tools legitimately write many compressed files quickly; so do Steam, Flatpak and caches.
+exclude_exe = ['/usr/bin/pacman', '/usr/bin/makepkg', '/usr/bin/rsync', '/usr/bin/cp', '/usr/bin/mv', '/usr/bin/tar', '/usr/bin/bsdtar', '/usr/bin/unzip', '/usr/bin/7z', '/usr/bin/7za', '/usr/bin/unrar', '/usr/bin/borg', '/usr/bin/restic', '/usr/bin/rclone', '/usr/bin/git', '/usr/bin/flatpak']
+match = { event = 'file_write', path_prefix = ['~/'], path_not_prefix = ['~/.cache/', '~/.local/share/Steam/', '~/.steam/', '~/.var/app/', '~/.local/share/flatpak/', '~/.cargo/', '~/.rustup/', '~/.npm/', '~/.local/share/Trash/'] }
+action = 'freeze'
+
+[[rule]]
+id = 'SYN-B-0012'
+title = 'Connection to a common mining-pool port'
+severity = 'medium'
+confidence = 0.5
+# Port only: without the sustained-CPU half of the spec rule this is a weak signal, hence notify.
+match = { event = 'connect', port_in = [3333, 3334, 4444, 5555, 7777, 9999, 14433, 14444, 45560, 45700] }
+action = 'notify'
+
+[[rule]]
+id = 'SYN-B-0013'
+title = 'Program executed from a world-writable temporary folder'
+severity = 'medium'
+confidence = 0.5
+# Some installers and AppImages run from /tmp; this is why it only notifies.
+match = { event = 'exec', exe_prefix = ['/tmp/', '/dev/shm/', '/var/tmp/'] }
+action = 'notify'
+
+[[rule]]
+id = 'SYN-B-0014'
+title = 'Program executed from a deleted file'
+severity = 'high'
+confidence = 0.7
+match = { event = 'exec', exe_suffix = [' (deleted)'] }
+action = 'freeze'

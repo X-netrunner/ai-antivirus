@@ -391,7 +391,13 @@ impl Config {
             1,
             60,
         );
-        range(&mut p, "engine.scan_max_mb", self.engine.scan_max_mb, 1, 4096);
+        range(
+            &mut p,
+            "engine.scan_max_mb",
+            self.engine.scan_max_mb,
+            1,
+            4096,
+        );
         range(
             &mut p,
             "engine.yara_timeout_ms",

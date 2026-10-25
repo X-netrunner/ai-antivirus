@@ -58,7 +58,13 @@ fn is_socket(fd: Option<&OsStr>) -> Option<bool> {
 /// `prefix = true` compares only the beginning.
 fn path_matches(path: &[u8], pattern: &str, prefix: bool) -> bool {
     let pat = pattern.as_bytes();
-    let cmp = |p: &[u8], tail: &[u8]| if prefix { p.starts_with(tail) } else { p == tail };
+    let cmp = |p: &[u8], tail: &[u8]| {
+        if prefix {
+            p.starts_with(tail)
+        } else {
+            p == tail
+        }
+    };
     let Some(rest) = pat.strip_prefix(b"~/") else {
         return cmp(path, pat);
     };
@@ -90,15 +96,28 @@ impl Match {
             return false;
         }
         let exe = f.exe.map(|p| p.as_os_str().as_bytes());
-        if !self.exe_prefix.is_empty() && !exe.is_some_and(|e| self.exe_prefix.iter().any(|p| e.starts_with(p.as_bytes()))) {
+        if !self.exe_prefix.is_empty()
+            && !exe.is_some_and(|e| self.exe_prefix.iter().any(|p| e.starts_with(p.as_bytes())))
+        {
             return false;
         }
-        if !self.exe_suffix.is_empty() && !exe.is_some_and(|e| self.exe_suffix.iter().any(|s| e.ends_with(s.as_bytes()))) {
+        if !self.exe_suffix.is_empty()
+            && !exe.is_some_and(|e| self.exe_suffix.iter().any(|s| e.ends_with(s.as_bytes())))
+        {
             return false;
         }
         if !self.argv_contains.is_empty() {
-            let line = f.argv.iter().map(|a| a.as_bytes()).collect::<Vec<_>>().join(&b' ');
-            if !self.argv_contains.iter().any(|s| contains(&line, s.as_bytes())) {
+            let line = f
+                .argv
+                .iter()
+                .map(|a| a.as_bytes())
+                .collect::<Vec<_>>()
+                .join(&b' ');
+            if !self
+                .argv_contains
+                .iter()
+                .any(|s| contains(&line, s.as_bytes()))
+            {
                 return false;
             }
         }
@@ -116,13 +135,30 @@ impl Match {
             return false;
         }
         let path = f.path.map(|p| p.as_os_str().as_bytes());
-        if !self.path_in.is_empty() && !path.is_some_and(|p| self.path_in.iter().any(|pat| path_matches(p, pat, false))) {
+        if !self.path_in.is_empty()
+            && !path.is_some_and(|p| self.path_in.iter().any(|pat| path_matches(p, pat, false)))
+        {
             return false;
         }
-        if !self.path_prefix.is_empty() && !path.is_some_and(|p| self.path_prefix.iter().any(|pat| path_matches(p, pat, true))) {
+        if !self.path_prefix.is_empty()
+            && !path.is_some_and(|p| {
+                self.path_prefix
+                    .iter()
+                    .any(|pat| path_matches(p, pat, true))
+            })
+        {
             return false;
         }
-        if !self.path_suffix.is_empty() && !path.is_some_and(|p| self.path_suffix.iter().any(|s| p.ends_with(s.as_bytes()))) {
+        if path.is_some_and(|p| {
+            self.path_not_prefix
+                .iter()
+                .any(|pat| path_matches(p, pat, true))
+        }) {
+            return false;
+        }
+        if !self.path_suffix.is_empty()
+            && !path.is_some_and(|p| self.path_suffix.iter().any(|s| p.ends_with(s.as_bytes())))
+        {
             return false;
         }
         if let Some(want) = self.setuid_file {
@@ -148,7 +184,9 @@ impl Match {
 impl Rule {
     /// The `match` table holds and the acting executable is not excluded.
     pub fn matches(&self, f: &Facts<'_>) -> bool {
-        if f.exe.is_some_and(|e| self.exclude_exe.iter().any(|x| x == e)) {
+        if f.exe
+            .is_some_and(|e| self.exclude_exe.iter().any(|x| x == e))
+        {
             return false;
         }
         self.matcher.matches(f)
@@ -193,14 +231,46 @@ mod tests {
 
     #[test]
     fn home_patterns_cover_every_home_and_nothing_else() {
-        assert!(path_matches(b"/home/nex/.ssh/authorized_keys", "~/.ssh/authorized_keys", false));
-        assert!(path_matches(b"/root/.ssh/authorized_keys", "~/.ssh/authorized_keys", false));
-        assert!(!path_matches(b"/home/a/b/.ssh/authorized_keys", "~/.ssh/authorized_keys", false));
-        assert!(!path_matches(b"/home//.ssh/authorized_keys", "~/.ssh/authorized_keys", false));
-        assert!(!path_matches(b"/tmp/.ssh/authorized_keys", "~/.ssh/authorized_keys", false));
-        assert!(path_matches(b"/home/nex/.config/systemd/user/x.service", "~/.config/systemd/user/", true));
-        assert!(path_matches(b"/etc/ld.so.preload", "/etc/ld.so.preload", false));
-        assert!(!path_matches(b"/etc/ld.so.preload.bak", "/etc/ld.so.preload", false));
+        assert!(path_matches(
+            b"/home/nex/.ssh/authorized_keys",
+            "~/.ssh/authorized_keys",
+            false
+        ));
+        assert!(path_matches(
+            b"/root/.ssh/authorized_keys",
+            "~/.ssh/authorized_keys",
+            false
+        ));
+        assert!(!path_matches(
+            b"/home/a/b/.ssh/authorized_keys",
+            "~/.ssh/authorized_keys",
+            false
+        ));
+        assert!(!path_matches(
+            b"/home//.ssh/authorized_keys",
+            "~/.ssh/authorized_keys",
+            false
+        ));
+        assert!(!path_matches(
+            b"/tmp/.ssh/authorized_keys",
+            "~/.ssh/authorized_keys",
+            false
+        ));
+        assert!(path_matches(
+            b"/home/nex/.config/systemd/user/x.service",
+            "~/.config/systemd/user/",
+            true
+        ));
+        assert!(path_matches(
+            b"/etc/ld.so.preload",
+            "/etc/ld.so.preload",
+            false
+        ));
+        assert!(!path_matches(
+            b"/etc/ld.so.preload.bak",
+            "/etc/ld.so.preload",
+            false
+        ));
     }
 
     #[test]
@@ -220,6 +290,17 @@ mod tests {
         assert!(r.matches(&f));
         f.path = Some(&other);
         assert!(!r.matches(&f));
+        let steam = rule(
+            "[[rule]]\nid='LOCAL-x'\ntitle='t'\nseverity='low'\nconfidence=0.1\naction='log'\n\
+             match={event='file_write', path_prefix=['~/'], path_not_prefix=['~/.local/share/Steam/']}",
+        );
+        let game = PathBuf::from("/home/u/.local/share/Steam/steamapps/x.pak");
+        let doc = PathBuf::from("/home/u/doc.odt");
+        let mut g = Facts::new(EventKind::FileWrite);
+        g.path = Some(&game);
+        assert!(!steam.matches(&g));
+        g.path = Some(&doc);
+        assert!(steam.matches(&g));
         f.path = Some(&unit);
         f.exe = Some(&pacman);
         assert!(!r.matches(&f));

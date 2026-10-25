@@ -1836,6 +1836,16 @@ version = "0.3.0"
 [[package]]
 name = "synapse-engined"
 version = "0.3.0"
+dependencies = [
+ "clap",
+ "flate2",
+ "serde_json",
+ "signal-hook",
+ "synapse-common",
+ "synapse-rules",
+ "tempfile",
+ "tracing",
+]
 
 [[package]]
 name = "synapse-rules"

@@ -404,16 +404,27 @@ impl Store {
 
     /// Look a SHA-256 up in the hash table (L1).
     pub fn hash_class(&self, sha: &Sha256) -> Result<Option<(HashClass, Option<String>)>> {
-        let mut stmt = self.conn.prepare_cached("SELECT class, label FROM hashes WHERE sha256 = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT class, label FROM hashes WHERE sha256 = ?1")?;
         let mut rows = stmt.query([&sha.as_bytes()[..]])?;
-        let Some(row) = rows.next()? else { return Ok(None) };
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
         let class: String = row.get(0)?;
         let label: Option<String> = row.get(1)?;
         Ok(class.parse().ok().map(|c| (c, label)))
     }
 
     /// Add or replace a hash-table entry.
-    pub fn put_hash(&self, sha: &Sha256, class: HashClass, label: Option<&str>, source: &str, now_ns: u64) -> Result<()> {
+    pub fn put_hash(
+        &self,
+        sha: &Sha256,
+        class: HashClass,
+        label: Option<&str>,
+        source: &str,
+        now_ns: u64,
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO hashes (sha256, class, label, source, added_ts_ns) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(sha256) DO UPDATE SET class = excluded.class, label = excluded.label, source = excluded.source",
@@ -428,7 +439,9 @@ impl Store {
             "SELECT sha256, package, size, mtime_ns, verified_ns FROM trust_cache WHERE path = ?1",
         )?;
         let mut rows = stmt.query([path])?;
-        let Some(row) = rows.next()? else { return Ok(None) };
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
         let sha: Vec<u8> = row.get(0)?;
         let mut digest = [0u8; 32];
         if sha.len() != 32 {
@@ -446,7 +459,11 @@ impl Store {
     }
 
     /// Replace one package's entries in a single transaction (a package upgrade removes files too).
-    pub fn trust_replace_package(&mut self, package: &str, entries: &[TrustEntry]) -> Result<usize> {
+    pub fn trust_replace_package(
+        &mut self,
+        package: &str,
+        entries: &[TrustEntry],
+    ) -> Result<usize> {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM trust_cache WHERE package = ?1", [package])?;
         {
@@ -480,7 +497,9 @@ impl Store {
 
     /// Packages in the trust cache and their file counts.
     pub fn trust_packages(&self) -> Result<Vec<(String, u64)>> {
-        let mut stmt = self.conn.prepare("SELECT package, COUNT(*) FROM trust_cache GROUP BY package ORDER BY package")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT package, COUNT(*) FROM trust_cache GROUP BY package ORDER BY package",
+        )?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
         let mut out = Vec::new();
         for row in rows {
@@ -496,7 +515,13 @@ impl Store {
             "SELECT path, sha256, size, mtime_ns, verified_ns FROM trust_cache WHERE package = ?1 ORDER BY path",
         )?;
         let rows = stmt.query_map([package], |r| {
-            Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?))
+            Ok((
+                r.get::<_, Vec<u8>>(0)?,
+                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+            ))
         })?;
         let mut out = Vec::new();
         for row in rows {
@@ -542,8 +567,13 @@ mod tests {
         let mut store = Store::open_in_memory().unwrap();
         let sha = Sha256([7; 32]);
         assert!(store.hash_class(&sha).unwrap().is_none());
-        store.put_hash(&sha, HashClass::Bad, Some("eicar"), "test", 1).unwrap();
-        assert_eq!(store.hash_class(&sha).unwrap(), Some((HashClass::Bad, Some("eicar".to_owned()))));
+        store
+            .put_hash(&sha, HashClass::Bad, Some("eicar"), "test", 1)
+            .unwrap();
+        assert_eq!(
+            store.hash_class(&sha).unwrap(),
+            Some((HashClass::Bad, Some("eicar".to_owned())))
+        );
 
         let e = TrustEntry {
             path: b"/usr/bin/bash".to_vec(),
@@ -553,14 +583,34 @@ mod tests {
             mtime_ns: 1_000_000_000,
             verified_ns: 0,
         };
-        let other = TrustEntry { path: b"/usr/bin/old".to_vec(), ..e.clone() };
-        assert_eq!(store.trust_replace_package("bash", &[e.clone(), other]).unwrap(), 2);
+        let other = TrustEntry {
+            path: b"/usr/bin/old".to_vec(),
+            ..e.clone()
+        };
+        assert_eq!(
+            store
+                .trust_replace_package("bash", &[e.clone(), other])
+                .unwrap(),
+            2
+        );
         // an upgrade that dropped a file removes it from the cache
-        assert_eq!(store.trust_replace_package("bash", &[e.clone()]).unwrap(), 1);
+        assert_eq!(
+            store.trust_replace_package("bash", std::slice::from_ref(&e)).unwrap(),
+            1
+        );
         assert!(store.trust_get(b"/usr/bin/old").unwrap().is_none());
         store.trust_mark_verified(b"/usr/bin/bash", 5).unwrap();
-        assert_eq!(store.trust_get(b"/usr/bin/bash").unwrap().map(|t| t.verified_ns), Some(5));
-        assert_eq!(store.trust_packages().unwrap(), vec![("bash".to_owned(), 1)]);
+        assert_eq!(
+            store
+                .trust_get(b"/usr/bin/bash")
+                .unwrap()
+                .map(|t| t.verified_ns),
+            Some(5)
+        );
+        assert_eq!(
+            store.trust_packages().unwrap(),
+            vec![("bash".to_owned(), 1)]
+        );
         assert_eq!(store.trust_entries("bash").unwrap().len(), 1);
 
         for i in 0..3u64 {
@@ -571,7 +621,10 @@ mod tests {
                     severity: Severity::High,
                     confidence: 0.5,
                     title: "t".into(),
-                    proc_key: Some(ProcKey { pid: 9, start_ns: 3 }),
+                    proc_key: Some(ProcKey {
+                        pid: 9,
+                        start_ns: 3,
+                    }),
                     event_id: None,
                     detail: serde_json::json!({"k": i}),
                 })
@@ -581,7 +634,13 @@ mod tests {
         assert_eq!(a.len(), 2);
         assert_eq!(a[0].rule_id, "SYN-B-0001");
         assert_eq!(a[1].detail["k"], 2);
-        assert_eq!(a[1].proc_key, Some(ProcKey { pid: 9, start_ns: 3 }));
+        assert_eq!(
+            a[1].proc_key,
+            Some(ProcKey {
+                pid: 9,
+                start_ns: 3
+            })
+        );
     }
     use crate::event::BootId;
     use crate::model::{ActionStatus, HashClass, ProposalStatus, Verdict};

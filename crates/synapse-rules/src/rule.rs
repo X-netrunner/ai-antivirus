@@ -90,6 +90,9 @@ pub struct Match {
     /// File events: the path starts with one of these (`~/` as above).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub path_prefix: Vec<String>,
+    /// File events: the path starts with none of these (`~/` as above): folders a rule leaves alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path_not_prefix: Vec<String>,
     /// File events: the path ends with one of these (`.service`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub path_suffix: Vec<String>,
@@ -140,7 +143,10 @@ impl EventKind {
     fn is_file(self) -> bool {
         matches!(
             self,
-            EventKind::FileWrite | EventKind::FileCreate | EventKind::FileRename | EventKind::FileUnlink
+            EventKind::FileWrite
+                | EventKind::FileCreate
+                | EventKind::FileRename
+                | EventKind::FileUnlink
         )
     }
 }
@@ -217,9 +223,13 @@ impl Action {
 pub const HIGH_ENTROPY_MILLI: u16 = 7200;
 
 fn valid_id(id: &str) -> bool {
-    let shipped = id.strip_prefix("SYN-B-").is_some_and(|n| n.len() == 4 && n.bytes().all(|b| b.is_ascii_digit()));
+    let shipped = id
+        .strip_prefix("SYN-B-")
+        .is_some_and(|n| n.len() == 4 && n.bytes().all(|b| b.is_ascii_digit()));
     let local = id.strip_prefix("LOCAL-").is_some_and(|n| {
-        (1..=48).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        (1..=48).contains(&n.len())
+            && n.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
     });
     shipped || local
 }
@@ -251,17 +261,62 @@ impl Rule {
         }
 
         // lists: not too long, no empty strings
-        let lists: [(&str, usize, bool); 10] = [
-            ("exe_in", m.exe_in.len(), m.exe_in.iter().any(|p| p.as_os_str().is_empty())),
-            ("exe_prefix", m.exe_prefix.len(), m.exe_prefix.iter().any(String::is_empty)),
-            ("exe_suffix", m.exe_suffix.len(), m.exe_suffix.iter().any(String::is_empty)),
-            ("parent_exe_in", m.parent_exe_in.len(), m.parent_exe_in.iter().any(|p| p.as_os_str().is_empty())),
-            ("argv_contains", m.argv_contains.len(), m.argv_contains.iter().any(String::is_empty)),
-            ("stdin_from_exe_in", m.stdin_from_exe_in.len(), m.stdin_from_exe_in.iter().any(|p| p.as_os_str().is_empty())),
-            ("path_in", m.path_in.len(), m.path_in.iter().any(String::is_empty)),
-            ("path_prefix", m.path_prefix.len(), m.path_prefix.iter().any(String::is_empty)),
-            ("path_suffix", m.path_suffix.len(), m.path_suffix.iter().any(String::is_empty)),
-            ("exclude_exe", self.exclude_exe.len(), self.exclude_exe.iter().any(|p| p.as_os_str().is_empty())),
+        let lists: [(&str, usize, bool); 11] = [
+            (
+                "path_not_prefix",
+                m.path_not_prefix.len(),
+                m.path_not_prefix.iter().any(String::is_empty),
+            ),
+            (
+                "exe_in",
+                m.exe_in.len(),
+                m.exe_in.iter().any(|p| p.as_os_str().is_empty()),
+            ),
+            (
+                "exe_prefix",
+                m.exe_prefix.len(),
+                m.exe_prefix.iter().any(String::is_empty),
+            ),
+            (
+                "exe_suffix",
+                m.exe_suffix.len(),
+                m.exe_suffix.iter().any(String::is_empty),
+            ),
+            (
+                "parent_exe_in",
+                m.parent_exe_in.len(),
+                m.parent_exe_in.iter().any(|p| p.as_os_str().is_empty()),
+            ),
+            (
+                "argv_contains",
+                m.argv_contains.len(),
+                m.argv_contains.iter().any(String::is_empty),
+            ),
+            (
+                "stdin_from_exe_in",
+                m.stdin_from_exe_in.len(),
+                m.stdin_from_exe_in.iter().any(|p| p.as_os_str().is_empty()),
+            ),
+            (
+                "path_in",
+                m.path_in.len(),
+                m.path_in.iter().any(String::is_empty),
+            ),
+            (
+                "path_prefix",
+                m.path_prefix.len(),
+                m.path_prefix.iter().any(String::is_empty),
+            ),
+            (
+                "path_suffix",
+                m.path_suffix.len(),
+                m.path_suffix.iter().any(String::is_empty),
+            ),
+            (
+                "exclude_exe",
+                self.exclude_exe.len(),
+                self.exclude_exe.iter().any(|p| p.as_os_str().is_empty()),
+            ),
         ];
         for (name, len, has_empty) in lists {
             if len > MAX_LIST {
@@ -281,9 +336,15 @@ impl Rule {
                 bad(format!("{name} entries must be absolute paths"));
             }
         }
-        for (name, pats) in [("path_in", &m.path_in), ("path_prefix", &m.path_prefix)] {
+        for (name, pats) in [
+            ("path_in", &m.path_in),
+            ("path_prefix", &m.path_prefix),
+            ("path_not_prefix", &m.path_not_prefix),
+        ] {
             if pats.iter().any(|p| !valid_path_pattern(p)) {
-                bad(format!("{name} entries must be absolute or start with ~/, without .."));
+                bad(format!(
+                    "{name} entries must be absolute or start with ~/, without .."
+                ));
             }
         }
 
@@ -295,9 +356,12 @@ impl Rule {
         if exec_only && kind != EventKind::Exec {
             bad("argv_contains, stdin_is_socket, stdout_is_socket and stdin_from_exe_in need event = 'exec'".into());
         }
-        let file_keys = !m.path_in.is_empty() || !m.path_prefix.is_empty() || !m.path_suffix.is_empty();
+        let file_keys = !m.path_in.is_empty()
+            || !m.path_prefix.is_empty()
+            || !m.path_not_prefix.is_empty()
+            || !m.path_suffix.is_empty();
         if file_keys && !kind.is_file() {
-            bad("path_in, path_prefix and path_suffix need a file event".into());
+            bad("path_in, path_prefix, path_not_prefix and path_suffix need a file event".into());
         }
         if m.setuid_file.is_some() && kind != EventKind::FileWrite {
             bad("setuid_file needs event = 'file_write'".into());
@@ -331,8 +395,13 @@ impl Rule {
                 if t.events == Some(0) || t.distinct_files_written == Some(0) {
                     bad("threshold counts must be at least 1".into());
                 }
-                if (t.distinct_files_written.is_some() || t.high_entropy_ratio.is_some()) && kind != EventKind::FileWrite {
-                    bad("distinct_files_written and high_entropy_ratio need event = 'file_write'".into());
+                if (t.distinct_files_written.is_some() || t.high_entropy_ratio.is_some())
+                    && kind != EventKind::FileWrite
+                {
+                    bad(
+                        "distinct_files_written and high_entropy_ratio need event = 'file_write'"
+                            .into(),
+                    );
                 }
                 if let Some(r) = t.high_entropy_ratio {
                     if !(0.0..=1.0).contains(&r) || r.is_nan() {
@@ -359,8 +428,14 @@ pub struct RuleSet {
 impl RuleSet {
     /// Parse and validate one file's text. `origin` names it in error messages.
     pub fn parse_str(text: &str, origin: &str) -> Result<Vec<Rule>> {
-        let file: RuleFile = toml::from_str(text).map_err(|e| Error::Rules(vec![format!("{origin}: {e}")]))?;
-        let problems: Vec<String> = file.rule.iter().flat_map(|r| r.problems()).map(|p| format!("{origin}: {p}")).collect();
+        let file: RuleFile =
+            toml::from_str(text).map_err(|e| Error::Rules(vec![format!("{origin}: {e}")]))?;
+        let problems: Vec<String> = file
+            .rule
+            .iter()
+            .flat_map(|r| r.problems())
+            .map(|p| format!("{origin}: {p}"))
+            .collect();
         if problems.is_empty() {
             Ok(file.rule)
         } else {
@@ -380,7 +455,10 @@ impl RuleSet {
         for f in &files {
             let meta = fs::symlink_metadata(f).map_err(|e| Error::io(f, e))?;
             if meta.len() > MAX_RULE_FILE_BYTES {
-                problems.push(format!("{}: larger than {MAX_RULE_FILE_BYTES} bytes", f.display()));
+                problems.push(format!(
+                    "{}: larger than {MAX_RULE_FILE_BYTES} bytes",
+                    f.display()
+                ));
                 continue;
             }
             let text = fs::read_to_string(f).map_err(|e| Error::io(f, e))?;
@@ -465,7 +543,12 @@ action = 'freeze'
         assert_eq!(r[0].action, Action::Freeze);
         let r = RuleSet::parse_str(RANSOM, "t").unwrap();
         assert_eq!(r[0].scope, Scope::ProcessTree);
-        assert_eq!(r[0].threshold.as_ref().and_then(|t| t.distinct_files_written), Some(200));
+        assert_eq!(
+            r[0].threshold
+                .as_ref()
+                .and_then(|t| t.distinct_files_written),
+            Some(200)
+        );
     }
 
     #[test]
@@ -473,9 +556,12 @@ action = 'freeze'
         let typo = REVERSE_SHELL.replace("stdin_is_socket", "stdin_is_sockets");
         assert!(RuleSet::parse_str(&typo, "t").is_err());
         let wrong_kind = REVERSE_SHELL.replace("event = 'exec'", "event = 'connect'");
-        let Err(Error::Rules(p)) = RuleSet::parse_str(&wrong_kind, "t") else { panic!("accepted") };
+        let Err(Error::Rules(p)) = RuleSet::parse_str(&wrong_kind, "t") else {
+            panic!("accepted")
+        };
         assert!(p[0].contains("need event = 'exec'"), "{p:?}");
-        let extra = REVERSE_SHELL.replace("action = 'freeze'", "action = 'freeze'\nrun = 'rm -rf /'");
+        let extra =
+            REVERSE_SHELL.replace("action = 'freeze'", "action = 'freeze'\nrun = 'rm -rf /'");
         assert!(RuleSet::parse_str(&extra, "t").is_err());
         let action = REVERSE_SHELL.replace("'freeze'", "'reboot'");
         assert!(RuleSet::parse_str(&action, "t").is_err());
@@ -487,7 +573,9 @@ action = 'freeze'
             .replace("SYN-B-0001", "evil id")
             .replace("0.9", "1.5")
             .replace("'/usr/bin/sh'", "'sh'");
-        let Err(Error::Rules(p)) = RuleSet::parse_str(&bad, "t") else { panic!("accepted") };
+        let Err(Error::Rules(p)) = RuleSet::parse_str(&bad, "t") else {
+            panic!("accepted")
+        };
         assert_eq!(p.len(), 3, "{p:?}");
     }
 
@@ -513,10 +601,15 @@ action = 'freeze'
         let set = RuleSet::load_dir(dir.path()).unwrap();
         assert_eq!(set.rules.len(), 2);
         fs::write(dir.path().join("c.toml"), REVERSE_SHELL).unwrap();
-        let Err(Error::Rules(p)) = RuleSet::load_dir(dir.path()) else { panic!("duplicate accepted") };
+        let Err(Error::Rules(p)) = RuleSet::load_dir(dir.path()) else {
+            panic!("duplicate accepted")
+        };
         assert!(p[0].contains("duplicate"), "{p:?}");
         // a missing directory is an empty set, not an error
-        assert!(RuleSet::load_dir(&dir.path().join("nope")).unwrap().rules.is_empty());
+        assert!(RuleSet::load_dir(&dir.path().join("nope"))
+            .unwrap()
+            .rules
+            .is_empty());
     }
 
     #[test]

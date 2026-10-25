@@ -100,7 +100,9 @@ fn command_line(argv: &[std::ffi::OsString]) -> String {
 /// ` stdin=socket:[123]` when stdin is a socket or a pipe (what the reverse-shell and download-and-run rules look at), else nothing.
 fn stdin_note(stdio: &[OsString]) -> String {
     match stdio.first().map(|s| s.to_string_lossy()) {
-        Some(s) if s.starts_with("socket:") || s.starts_with("pipe:") => format!(" stdin={}", sanitize(&s)),
+        Some(s) if s.starts_with("socket:") || s.starts_with("pipe:") => {
+            format!(" stdin={}", sanitize(&s))
+        }
         _ => String::new(),
     }
 }

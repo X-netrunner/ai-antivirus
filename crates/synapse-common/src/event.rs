@@ -325,7 +325,11 @@ pub enum Event {
         cgroup: String,
         /// Where fds 0, 1 and 2 pointed at exec time, as `readlink /proc/<pid>/fd/N` shows them (`socket:[123]`, `pipe:[456]`,
         /// `/dev/pts/1`); empty entries for unreadable fds, an empty list when not collected. Added in M3; older logs omit it.
-        #[serde(default, skip_serializing_if = "Vec::is_empty", with = "os_serde::string_vec")]
+        #[serde(
+            default,
+            skip_serializing_if = "Vec::is_empty",
+            with = "os_serde::string_vec"
+        )]
         stdio: Vec<OsString>,
     },
     Exit {

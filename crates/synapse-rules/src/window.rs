@@ -45,12 +45,22 @@ pub struct Windows<K: Hash + Eq + Clone> {
 
 impl<K: Hash + Eq + Clone> Windows<K> {
     pub fn new(window_secs: u64, threshold: Threshold) -> Windows<K> {
-        Windows { window_ns: window_secs.saturating_mul(NS_PER_SEC), threshold, groups: HashMap::new() }
+        Windows {
+            window_ns: window_secs.saturating_mul(NS_PER_SEC),
+            threshold,
+            groups: HashMap::new(),
+        }
     }
 
     /// Record one matching event at `ts_ns` for `key` (`path`/`entropy` for file writes). Returns what the window held if
     /// this event reached the threshold.
-    pub fn push(&mut self, key: &K, ts_ns: u64, path: Option<&Path>, entropy: Option<u16>) -> Option<Fired> {
+    pub fn push(
+        &mut self,
+        key: &K,
+        ts_ns: u64,
+        path: Option<&Path>,
+        entropy: Option<u16>,
+    ) -> Option<Fired> {
         if !self.groups.contains_key(key) && self.groups.len() >= MAX_GROUPS {
             self.evict_oldest();
         }
@@ -63,7 +73,9 @@ impl<K: Hash + Eq + Clone> Windows<K> {
         // drop what fell out of the window
         let horizon = ts_ns.saturating_sub(window_ns);
         while g.order.front().is_some_and(|(t, _)| *t < horizon) || g.order.len() >= MAX_ENTRIES {
-            let Some((t, p)) = g.order.pop_front() else { break };
+            let Some((t, p)) = g.order.pop_front() else {
+                break;
+            };
             if let Some(p) = p {
                 if g.files.get(&p).is_some_and(|(newest, _)| *newest == t) {
                     if let Some((_, high)) = g.files.remove(&p) {
@@ -86,9 +98,14 @@ impl<K: Hash + Eq + Clone> Windows<K> {
 
         let t = &self.threshold;
         let distinct = g.files.len();
-        let ratio = if distinct == 0 { 0.0 } else { g.high as f64 / distinct as f64 };
+        let ratio = if distinct == 0 {
+            0.0
+        } else {
+            g.high as f64 / distinct as f64
+        };
         let reached = t.events.is_none_or(|n| g.order.len() >= n as usize)
-            && t.distinct_files_written.is_none_or(|n| distinct >= n as usize)
+            && t.distinct_files_written
+                .is_none_or(|n| distinct >= n as usize)
             && t.high_entropy_ratio.is_none_or(|r| ratio >= r);
         if !reached {
             return None;
@@ -107,7 +124,12 @@ impl<K: Hash + Eq + Clone> Windows<K> {
     }
 
     fn evict_oldest(&mut self) {
-        if let Some(k) = self.groups.iter().min_by_key(|(_, g)| g.last_seen).map(|(k, _)| k.clone()) {
+        if let Some(k) = self
+            .groups
+            .iter()
+            .min_by_key(|(_, g)| g.last_seen)
+            .map(|(k, _)| k.clone())
+        {
             self.groups.remove(&k);
         }
     }
@@ -115,7 +137,8 @@ impl<K: Hash + Eq + Clone> Windows<K> {
     /// Forget groups with nothing in their window (called now and then by the engine).
     pub fn sweep(&mut self, now_ns: u64) {
         let window_ns = self.window_ns;
-        self.groups.retain(|_, g| now_ns.saturating_sub(g.last_seen) < window_ns.saturating_mul(2));
+        self.groups
+            .retain(|_, g| now_ns.saturating_sub(g.last_seen) < window_ns.saturating_mul(2));
     }
 
     pub fn groups(&self) -> usize {
@@ -130,7 +153,14 @@ mod tests {
     const S: u64 = NS_PER_SEC;
 
     fn ransom(n: u32, ratio: Option<f64>) -> Windows<u32> {
-        Windows::new(10, Threshold { events: None, distinct_files_written: Some(n), high_entropy_ratio: ratio })
+        Windows::new(
+            10,
+            Threshold {
+                events: None,
+                distinct_files_written: Some(n),
+                high_entropy_ratio: ratio,
+            },
+        )
     }
 
     #[test]
@@ -153,12 +183,18 @@ mod tests {
         let mut w = ransom(100, Some(0.7));
         for i in 0..500u64 {
             let p = PathBuf::from(format!("/home/u/node_modules/f{i}.js"));
-            assert!(w.push(&1, i * S / 100, Some(&p), Some(4500)).is_none(), "text is not random");
+            assert!(
+                w.push(&1, i * S / 100, Some(&p), Some(4500)).is_none(),
+                "text is not random"
+            );
         }
         let mut w = ransom(100, None);
         let p = PathBuf::from("/home/u/db.sqlite");
         for i in 0..1000u64 {
-            assert!(w.push(&2, i * S / 100, Some(&p), Some(7990)).is_none(), "one file is one file");
+            assert!(
+                w.push(&2, i * S / 100, Some(&p), Some(7990)).is_none(),
+                "one file is one file"
+            );
         }
     }
 
@@ -174,7 +210,13 @@ mod tests {
 
     #[test]
     fn groups_are_counted_apart_and_bounded() {
-        let mut w: Windows<u32> = Windows::new(10, Threshold { events: Some(3), ..Threshold::default() });
+        let mut w: Windows<u32> = Windows::new(
+            10,
+            Threshold {
+                events: Some(3),
+                ..Threshold::default()
+            },
+        );
         assert!(w.push(&1, 0, None, None).is_none());
         assert!(w.push(&2, 1, None, None).is_none());
         assert!(w.push(&1, 2, None, None).is_none());
