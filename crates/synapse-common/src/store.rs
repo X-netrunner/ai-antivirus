@@ -5,8 +5,8 @@
 //!
 //! M0 provides the generic operations: open and migrate, batched event
 //! inserts, recent-event reads, alert inserts, statistics and retention
-//! cleanup. Per-table operations for verdicts, actions, proposals, hashes,
-//! baselines and the trust cache arrive with the milestones that use them.
+//! cleanup. M3 adds alert reads, the hash table and the trust cache. Verdicts,
+//! actions, proposals and baselines arrive with the milestones that use them.
 
 use std::fs::{OpenOptions, Permissions};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -16,8 +16,8 @@ use std::time::Duration;
 use rusqlite::{params, Connection};
 
 use crate::error::{Error, Result};
-use crate::event::{Envelope, ProcKey};
-use crate::model::Severity;
+use crate::event::{Envelope, ProcKey, Sha256};
+use crate::model::{HashClass, Severity};
 
 pub const SCHEMA_VERSION: i64 = 1;
 const SCHEMA_V1: &str = include_str!("schema_v1.sql");
@@ -327,6 +327,198 @@ impl Store {
     }
 }
 
+/// An alert as stored (for `synapsectl alerts`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlertRow {
+    pub id: i64,
+    pub ts_ns: u64,
+    pub rule_id: String,
+    pub severity: Severity,
+    pub confidence: f64,
+    pub title: String,
+    pub proc_key: Option<ProcKey>,
+    pub detail: serde_json::Value,
+    pub acknowledged: bool,
+}
+
+/// What pacman says one file should be (spec 7, L0). `verified_ns` is 0 until the file's hash was checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustEntry {
+    pub path: Vec<u8>,
+    pub sha256: Sha256,
+    pub package: String,
+    pub size: u64,
+    /// The mtree time, whole seconds, stored as nanoseconds.
+    pub mtime_ns: u64,
+    pub verified_ns: u64,
+}
+
+impl Store {
+    /// The newest `limit` alerts, oldest first.
+    pub fn recent_alerts(&self, limit: usize) -> Result<Vec<AlertRow>> {
+        let limit = i64::try_from(limit.min(MAX_RECENT)).unwrap_or(0);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, ts_ns, rule_id, severity, confidence, title, pid, proc_start_ns, detail, acknowledged
+             FROM alerts ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, f64>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, Option<i64>>(6)?,
+                r.get::<_, Option<i64>>(7)?,
+                r.get::<_, String>(8)?,
+                r.get::<_, i64>(9)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, ts, rule_id, sev, confidence, title, pid, start, detail, ack) = row?;
+            let proc_key = match (pid, start) {
+                (Some(p), Some(s)) => Some(ProcKey {
+                    pid: u32::try_from(p).unwrap_or(0),
+                    start_ns: u64::try_from(s).unwrap_or(0),
+                }),
+                _ => None,
+            };
+            out.push(AlertRow {
+                id,
+                ts_ns: u64::try_from(ts).unwrap_or(0),
+                rule_id,
+                // the CHECK constraint keeps this valid; fall back rather than fail a read
+                severity: sev.parse().unwrap_or(Severity::Medium),
+                confidence,
+                title,
+                proc_key,
+                detail: serde_json::from_str(&detail).unwrap_or(serde_json::Value::Null),
+                acknowledged: ack != 0,
+            });
+        }
+        out.reverse();
+        Ok(out)
+    }
+
+    /// Look a SHA-256 up in the hash table (L1).
+    pub fn hash_class(&self, sha: &Sha256) -> Result<Option<(HashClass, Option<String>)>> {
+        let mut stmt = self.conn.prepare_cached("SELECT class, label FROM hashes WHERE sha256 = ?1")?;
+        let mut rows = stmt.query([&sha.as_bytes()[..]])?;
+        let Some(row) = rows.next()? else { return Ok(None) };
+        let class: String = row.get(0)?;
+        let label: Option<String> = row.get(1)?;
+        Ok(class.parse().ok().map(|c| (c, label)))
+    }
+
+    /// Add or replace a hash-table entry.
+    pub fn put_hash(&self, sha: &Sha256, class: HashClass, label: Option<&str>, source: &str, now_ns: u64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO hashes (sha256, class, label, source, added_ts_ns) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(sha256) DO UPDATE SET class = excluded.class, label = excluded.label, source = excluded.source",
+            params![&sha.as_bytes()[..], class.as_str(), label, source, to_i64(now_ns, "added_ts_ns")?],
+        )?;
+        Ok(())
+    }
+
+    /// The trust-cache entry for `path`, if pacman owns it.
+    pub fn trust_get(&self, path: &[u8]) -> Result<Option<TrustEntry>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT sha256, package, size, mtime_ns, verified_ns FROM trust_cache WHERE path = ?1",
+        )?;
+        let mut rows = stmt.query([path])?;
+        let Some(row) = rows.next()? else { return Ok(None) };
+        let sha: Vec<u8> = row.get(0)?;
+        let mut digest = [0u8; 32];
+        if sha.len() != 32 {
+            return Ok(None);
+        }
+        digest.copy_from_slice(&sha);
+        Ok(Some(TrustEntry {
+            path: path.to_vec(),
+            sha256: Sha256(digest),
+            package: row.get(1)?,
+            size: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+            mtime_ns: u64::try_from(row.get::<_, i64>(3)?).unwrap_or(0),
+            verified_ns: u64::try_from(row.get::<_, i64>(4)?).unwrap_or(0),
+        }))
+    }
+
+    /// Replace one package's entries in a single transaction (a package upgrade removes files too).
+    pub fn trust_replace_package(&mut self, package: &str, entries: &[TrustEntry]) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM trust_cache WHERE package = ?1", [package])?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT OR REPLACE INTO trust_cache (path, sha256, package, size, mtime_ns, verified_ns)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for e in entries {
+                stmt.execute(params![
+                    e.path,
+                    &e.sha256.as_bytes()[..],
+                    e.package,
+                    to_i64(e.size, "size")?,
+                    to_i64(e.mtime_ns, "mtime_ns")?,
+                    to_i64(e.verified_ns, "verified_ns")?,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(entries.len())
+    }
+
+    /// Record that `path` was hashed and matched at `now_ns`.
+    pub fn trust_mark_verified(&self, path: &[u8], now_ns: u64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE trust_cache SET verified_ns = ?2 WHERE path = ?1",
+            params![path, to_i64(now_ns, "verified_ns")?],
+        )?;
+        Ok(())
+    }
+
+    /// Packages in the trust cache and their file counts.
+    pub fn trust_packages(&self) -> Result<Vec<(String, u64)>> {
+        let mut stmt = self.conn.prepare("SELECT package, COUNT(*) FROM trust_cache GROUP BY package ORDER BY package")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (p, n) = row?;
+            out.push((p, u64::try_from(n).unwrap_or(0)));
+        }
+        Ok(out)
+    }
+
+    /// Every entry of one package (for `synapsectl integrity`).
+    pub fn trust_entries(&self, package: &str) -> Result<Vec<TrustEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path, sha256, size, mtime_ns, verified_ns FROM trust_cache WHERE package = ?1 ORDER BY path",
+        )?;
+        let rows = stmt.query_map([package], |r| {
+            Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (path, sha, size, mtime, verified) = row?;
+            if sha.len() != 32 {
+                continue;
+            }
+            let mut digest = [0u8; 32];
+            digest.copy_from_slice(&sha);
+            out.push(TrustEntry {
+                path,
+                sha256: Sha256(digest),
+                package: package.to_owned(),
+                size: u64::try_from(size).unwrap_or(0),
+                mtime_ns: u64::try_from(mtime).unwrap_or(0),
+                verified_ns: u64::try_from(verified).unwrap_or(0),
+            });
+        }
+        Ok(out)
+    }
+}
+
 fn to_i64(v: u64, what: &'static str) -> Result<i64> {
     i64::try_from(v).map_err(|_| Error::OutOfRange(what))
 }
@@ -344,6 +536,53 @@ fn pages_to_bytes(pages: i64, page_size: i64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hashes_trust_cache_and_alert_reads() {
+        let mut store = Store::open_in_memory().unwrap();
+        let sha = Sha256([7; 32]);
+        assert!(store.hash_class(&sha).unwrap().is_none());
+        store.put_hash(&sha, HashClass::Bad, Some("eicar"), "test", 1).unwrap();
+        assert_eq!(store.hash_class(&sha).unwrap(), Some((HashClass::Bad, Some("eicar".to_owned()))));
+
+        let e = TrustEntry {
+            path: b"/usr/bin/bash".to_vec(),
+            sha256: sha,
+            package: "bash".into(),
+            size: 10,
+            mtime_ns: 1_000_000_000,
+            verified_ns: 0,
+        };
+        let other = TrustEntry { path: b"/usr/bin/old".to_vec(), ..e.clone() };
+        assert_eq!(store.trust_replace_package("bash", &[e.clone(), other]).unwrap(), 2);
+        // an upgrade that dropped a file removes it from the cache
+        assert_eq!(store.trust_replace_package("bash", &[e.clone()]).unwrap(), 1);
+        assert!(store.trust_get(b"/usr/bin/old").unwrap().is_none());
+        store.trust_mark_verified(b"/usr/bin/bash", 5).unwrap();
+        assert_eq!(store.trust_get(b"/usr/bin/bash").unwrap().map(|t| t.verified_ns), Some(5));
+        assert_eq!(store.trust_packages().unwrap(), vec![("bash".to_owned(), 1)]);
+        assert_eq!(store.trust_entries("bash").unwrap().len(), 1);
+
+        for i in 0..3u64 {
+            store
+                .insert_alert(&NewAlert {
+                    ts_ns: i,
+                    rule_id: format!("SYN-B-000{i}"),
+                    severity: Severity::High,
+                    confidence: 0.5,
+                    title: "t".into(),
+                    proc_key: Some(ProcKey { pid: 9, start_ns: 3 }),
+                    event_id: None,
+                    detail: serde_json::json!({"k": i}),
+                })
+                .unwrap();
+        }
+        let a = store.recent_alerts(2).unwrap();
+        assert_eq!(a.len(), 2);
+        assert_eq!(a[0].rule_id, "SYN-B-0001");
+        assert_eq!(a[1].detail["k"], 2);
+        assert_eq!(a[1].proc_key, Some(ProcKey { pid: 9, start_ns: 3 }));
+    }
     use crate::event::BootId;
     use crate::model::{ActionStatus, HashClass, ProposalStatus, Verdict};
     use crate::testutil::{all_event_variants, sample_envelope};

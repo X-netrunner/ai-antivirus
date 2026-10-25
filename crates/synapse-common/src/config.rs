@@ -147,6 +147,16 @@ impl Default for SensorsConfig {
 pub struct EngineConfig {
     pub allow_exe: Vec<PathBuf>,
     pub max_actions_per_minute: u32,
+    /// Behavior rules (`behavior/**/*.toml`) and YARA rules (`yara/*.yar`). Added in M3.
+    pub rules_dir: PathBuf,
+    /// Files larger than this are hashed and YARA-scanned only on demand (`synapsectl scan`).
+    pub scan_max_mb: u32,
+    /// Limit for one YARA-X scan.
+    pub yara_timeout_ms: u32,
+    /// Scan written files that are executable or in a temporary or download folder.
+    pub scan_on_write: bool,
+    /// At most this many automatic scans per second; the rest are skipped and counted.
+    pub max_scans_per_sec: u32,
 }
 
 impl Default for EngineConfig {
@@ -161,6 +171,11 @@ impl Default for EngineConfig {
             .map(PathBuf::from)
             .collect(),
             max_actions_per_minute: 3,
+            rules_dir: PathBuf::from("/var/lib/synapse/rules"),
+            scan_max_mb: 32,
+            yara_timeout_ms: 2000,
+            scan_on_write: true,
+            max_scans_per_sec: 50,
         }
     }
 }
@@ -376,6 +391,21 @@ impl Config {
             1,
             60,
         );
+        range(&mut p, "engine.scan_max_mb", self.engine.scan_max_mb, 1, 4096);
+        range(
+            &mut p,
+            "engine.yara_timeout_ms",
+            self.engine.yara_timeout_ms,
+            50,
+            60_000,
+        );
+        range(
+            &mut p,
+            "engine.max_scans_per_sec",
+            self.engine.max_scans_per_sec,
+            1,
+            10_000,
+        );
         range(&mut p, "ai.timeout_secs", self.ai.timeout_secs, 1, 300);
         range(
             &mut p,
@@ -412,6 +442,7 @@ impl Config {
             p.push("sensors.fanotify_marks must not be empty".to_owned());
         }
         check_abs(&mut p, "sensors.ebpf_object", &self.sensors.ebpf_object);
+        check_abs(&mut p, "engine.rules_dir", &self.engine.rules_dir);
         check_abs(&mut p, "paths.state_dir", &self.paths.state_dir);
         check_abs(&mut p, "paths.log_dir", &self.paths.log_dir);
         check_abs(&mut p, "paths.run_dir", &self.paths.run_dir);

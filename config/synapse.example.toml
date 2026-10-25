@@ -24,6 +24,11 @@ event_log_keep = 5             # 1..=100; rotated files events.jsonl.1 .. .N
 # Never acted on by the engine or the responder.
 allow_exe = ['/usr/bin/pacman', '/usr/bin/makepkg', '/usr/lib/systemd/systemd']
 max_actions_per_minute = 3     # 1..=60; exceeding it trips the circuit breaker
+rules_dir = '/var/lib/synapse/rules'  # behavior/**/*.toml (behavior rules) and yara/*.yar
+scan_max_mb = 32               # 1..=4096; larger files are scanned only by `synapsectl scan`
+yara_timeout_ms = 2000         # 50..=60000; per scan
+scan_on_write = true           # scan written files that are executable or in /tmp, /dev/shm, /var/tmp, ~/Downloads
+max_scans_per_sec = 50         # 1..=10000; automatic scans beyond this are skipped and counted
 
 [ai]
 enabled = false

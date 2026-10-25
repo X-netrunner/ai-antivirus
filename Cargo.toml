@@ -5,6 +5,8 @@ members = [
     "crates/synapse-ebpf-common",
     "crates/synapse-sys",
     "crates/synapse-sensord",
+    "crates/synapse-rules",
+    "crates/synapse-engined",
     "crates/synapsectl",
     "xtask",
 ]
@@ -21,10 +23,12 @@ publish = false
 [workspace.dependencies]
 aya = "0.13"
 clap = { version = "4", features = ["derive"] }
+flate2 = "1"
 libc = "0.2"
 rusqlite = "0.37"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 signal-hook = "0.3"
 tempfile = "3"
 thiserror = "2"
@@ -32,6 +36,7 @@ toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 url = "2"
+yara-x = { version = "1", default-features = false, features = ["constant-folding", "exact-atoms", "fast-regexp", "elf-module", "hash-module", "math-module", "string-module"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
