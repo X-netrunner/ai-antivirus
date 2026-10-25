@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use synapse_common::config::Config;
 use synapse_common::event::{now_ns, Envelope};
 use synapse_common::eventlog::{self, Follower};
+use synapse_common::notify::Heartbeat;
 use synapse_common::store::{NewAlert, Store};
 use synapse_rules::rule::RuleSet;
 use synapse_rules::scan::Yara;
@@ -164,8 +165,11 @@ pub fn run(cfg: &Config, shutdown: &AtomicBool) -> Result<(), String> {
     let (mut last_sweep, mut last_stats, mut last_ai) =
         (Instant::now(), Instant::now(), Instant::now());
     let mut rules_seen = rules_fingerprint(&cfg.engine.rules_dir);
+    let mut heartbeat = Heartbeat::from_env();
+    heartbeat.ready("following the event log");
     let mut bad_lines = 0u64;
     while !shutdown.load(Ordering::Relaxed) {
+        heartbeat.tick();
         let lines = match follower.poll() {
             Ok(l) => l,
             Err(e) => {
@@ -227,6 +231,7 @@ pub fn run(cfg: &Config, shutdown: &AtomicBool) -> Result<(), String> {
             last_stats = Instant::now();
         }
     }
+    heartbeat.stopping();
     info!("engine stopped");
     Ok(())
 }

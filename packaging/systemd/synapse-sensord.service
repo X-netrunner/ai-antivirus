@@ -3,7 +3,6 @@
 # M2 sensor daemon: eBPF process/network sensor (with /proc polling as fallback)
 # + fanotify file-write sensor -> events.jsonl.
 # Not yet in this unit (arrives with the milestone that needs it):
-#   * Type=notify and WatchdogSec= (sd_notify heartbeats, M6)
 #   * SystemCallFilter= (to be added after tracing the real syscall set, M7)
 #
 # The eBPF object must exist at /usr/lib/synapse/synapse-ebpf.o, owned by root
@@ -18,7 +17,10 @@ After=local-fs.target
 ConditionPathExists=/etc/synapse/synapse.toml
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+WatchdogSec=30
+TimeoutStartSec=90
 ExecStart=/usr/bin/synapse-sensord --config /etc/synapse/synapse.toml
 Restart=always
 RestartSec=2

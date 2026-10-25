@@ -3,7 +3,7 @@
 # M4 responder daemon: follows the alerts in /var/lib/synapse/synapse.db and acts on them as the mode allows
 # (general.mode, response.*). Shipped config is alert-only: it only records what it would do and notifies.
 # Control socket: /run/synapse/responder.sock (root only, checked with SO_PEERCRED) for synapsectl approve/reject/undo.
-# Not yet in this unit: Type=notify / WatchdogSec= (M6) and SystemCallFilter= (M7).
+# Not yet in this unit: SystemCallFilter= (after tracing the real syscall set).
 #
 # Runs as root with only the capabilities it uses:
 #   CAP_KILL                 signal other users' processes (pidfd SIGKILL when cgroup v2 is missing)
@@ -28,7 +28,10 @@ Wants=synapse-engined.service
 ConditionPathExists=/etc/synapse/synapse.toml
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+WatchdogSec=30
+TimeoutStartSec=90
 ExecStart=/usr/bin/synapse-responderd --config /etc/synapse/synapse.toml
 Restart=always
 RestartSec=2

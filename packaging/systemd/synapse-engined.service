@@ -2,7 +2,7 @@
 #
 # M3 engine daemon: follows events.jsonl, runs pacman trust, the hash table, YARA-X and the behavior rules, and stores
 # alerts in /var/lib/synapse/synapse.db. It never acts on the system: synapse-responderd (M4) does, as the mode allows.
-# Not yet in this unit: Type=notify / WatchdogSec= (M6) and SystemCallFilter= (M7, after tracing the real syscall set).
+# Not yet in this unit: SystemCallFilter= (after tracing the real syscall set).
 #
 # Runs as the unprivileged `synapse` user with no capabilities (spec 4). Consequences:
 #   * it can only scan files `synapse` may read: system binaries, world-readable files in /tmp, /dev/shm, /var/tmp;
@@ -19,7 +19,10 @@ Wants=synapse-sensord.service
 ConditionPathExists=/etc/synapse/synapse.toml
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+WatchdogSec=30
+TimeoutStartSec=90
 ExecStart=/usr/bin/synapse-engined --config /etc/synapse/synapse.toml
 Restart=always
 RestartSec=2

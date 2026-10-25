@@ -10,6 +10,7 @@ pub mod event;
 pub mod eventlog;
 pub mod logging;
 pub mod model;
+pub mod notify;
 pub mod store;
 
 #[cfg(test)]

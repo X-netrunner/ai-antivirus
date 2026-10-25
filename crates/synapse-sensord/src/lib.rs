@@ -28,6 +28,7 @@ use std::time::{Duration, Instant};
 use synapse_common::config::Config;
 use synapse_common::event::{BootId, Envelope, Event};
 use synapse_common::eventlog::EventLogWriter;
+use synapse_common::notify::Heartbeat;
 use synapse_common::{Error, Result};
 use tracing::{error, info, warn};
 
@@ -218,7 +219,10 @@ pub fn run(cfg: &Config, shutdown: &Arc<AtomicBool>) -> Result<()> {
 
     write_health(&mut writer);
     let mut next_health = Instant::now() + HEALTH_INTERVAL;
+    let mut heartbeat = Heartbeat::from_env();
+    heartbeat.ready("collecting events");
     loop {
+        heartbeat.tick();
         match rx.recv_timeout(WRITER_TICK) {
             Ok((ts_ns, event)) => writer.write(ts_ns, event),
             Err(RecvTimeoutError::Timeout) => {}
@@ -233,6 +237,7 @@ pub fn run(cfg: &Config, shutdown: &Arc<AtomicBool>) -> Result<()> {
         }
     }
 
+    heartbeat.stopping();
     // Drain what the sensors queued before they noticed the shutdown.
     let pending: Vec<Stamped> = rx.try_iter().collect();
     for (ts_ns, event) in pending {

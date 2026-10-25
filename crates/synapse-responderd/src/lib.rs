@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use synapse_common::config::Config;
 use synapse_common::event::now_ns;
+use synapse_common::notify::Heartbeat;
 use synapse_common::store::Store;
 use tracing::{error, info, warn};
 
@@ -110,7 +111,10 @@ pub fn run(cfg: &Config, shutdown: &Arc<AtomicBool>) -> Result<(), String> {
     );
 
     let mut last_sweep = Instant::now();
+    let mut heartbeat = Heartbeat::from_env();
+    heartbeat.ready("following alerts");
     while !shutdown.load(Ordering::Relaxed) {
+        heartbeat.tick();
         let before = cursor;
         match responder.lock() {
             Ok(mut r) => {
@@ -129,6 +133,7 @@ pub fn run(cfg: &Config, shutdown: &Arc<AtomicBool>) -> Result<(), String> {
             thread::sleep(POLL);
         }
     }
+    heartbeat.stopping();
     if let Some(t) = server {
         let _ = t.join();
     }
