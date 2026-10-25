@@ -206,6 +206,12 @@ pub struct ResponseConfig {
     /// Highest level that may run without human approval. Capped by the mode.
     pub auto_levels_max: u8,
     pub nft_block_ttl_secs: u32,
+    /// Record what would be done (`dry_run`) instead of doing it, whatever the mode. Added in M4.
+    pub dry_run: bool,
+    /// Mount point of the cgroup v2 hierarchy; suspects are frozen in `<cgroup_root>/synapse.slice/`.
+    pub cgroup_root: PathBuf,
+    /// Desktop notifications are spooled here for `synapse-notify` (setgid directory of group `synapse-notify`).
+    pub notify_dir: PathBuf,
 }
 
 impl Default for ResponseConfig {
@@ -213,6 +219,9 @@ impl Default for ResponseConfig {
         Self {
             auto_levels_max: 3,
             nft_block_ttl_secs: 3600,
+            dry_run: false,
+            cgroup_root: PathBuf::from("/sys/fs/cgroup"),
+            notify_dir: PathBuf::from("/run/synapse-notify"),
         }
     }
 }
@@ -324,6 +333,16 @@ impl Config {
     /// Path of the SQLite database inside `paths.state_dir`.
     pub fn db_path(&self) -> PathBuf {
         self.paths.state_dir.join(DB_FILE_NAME)
+    }
+
+    /// Where quarantined files are kept (never deleted automatically).
+    pub fn quarantine_dir(&self) -> PathBuf {
+        self.paths.state_dir.join("quarantine")
+    }
+
+    /// The responder's control socket (`synapsectl approve`, `undo` ...).
+    pub fn responder_socket(&self) -> PathBuf {
+        self.paths.run_dir.join("responder.sock")
     }
 
     /// Rotation threshold of the JSONL event log in bytes.
@@ -452,6 +471,8 @@ impl Config {
         check_abs(&mut p, "paths.state_dir", &self.paths.state_dir);
         check_abs(&mut p, "paths.log_dir", &self.paths.log_dir);
         check_abs(&mut p, "paths.run_dir", &self.paths.run_dir);
+        check_abs(&mut p, "response.cgroup_root", &self.response.cgroup_root);
+        check_abs(&mut p, "response.notify_dir", &self.response.notify_dir);
 
         if let Err(msg) = check_loopback_endpoint(&self.ai.endpoint) {
             p.push(format!("ai.endpoint {msg}"));

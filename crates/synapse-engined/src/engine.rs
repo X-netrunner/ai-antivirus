@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::unix::fs::MetadataExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 use synapse_common::event::{Envelope, Event, ProcKey};
@@ -71,6 +71,8 @@ pub struct Engine {
     pub files: FileCheck,
     scan_on_write: bool,
     pacman_active: Box<dyn Fn() -> bool + Send>,
+    /// `engine.allow_exe`: alerts about these programs never ask for more than a notification.
+    allow_exe: Vec<PathBuf>,
     dedupe: HashMap<String, u64>,
     pub stats: EngineStats,
 }
@@ -110,6 +112,7 @@ impl Engine {
             files,
             scan_on_write,
             pacman_active: Box::new(synapse_rules::mtree::pacman_active),
+            allow_exe: Vec::new(),
             dedupe: HashMap::new(),
             stats: EngineStats::default(),
         }
@@ -118,6 +121,12 @@ impl Engine {
     /// Replace how "a pacman transaction runs" is decided (tests, replay).
     pub fn set_pacman_probe(&mut self, f: impl Fn() -> bool + Send + 'static) {
         self.pacman_active = Box::new(f);
+    }
+
+    /// Programs whose alerts are capped at `notify` (spec 8: the allowlist is enforced in the engine and, again, in
+    /// the responder).
+    pub fn set_allow_exe(&mut self, exes: Vec<PathBuf>) {
+        self.allow_exe = exes;
     }
 
     pub fn rule_count(&self) -> usize {
@@ -260,8 +269,24 @@ impl Engine {
             | Event::Tamper { .. }
             | Event::SensorHealth { .. } => {}
         }
+        self.cap_allowlisted(&mut out);
         self.stats.alerts += out.len() as u64;
         out
+    }
+
+    fn cap_allowlisted(&self, out: &mut [Alert]) {
+        for a in out.iter_mut().filter(|a| a.action > Action::Notify) {
+            let Some(exe) = a.proc_key.and_then(|k| self.procs.exe(k)) else {
+                continue;
+            };
+            if self.allow_exe.iter().any(|p| p == exe) {
+                if let Some(obj) = a.detail.as_object_mut() {
+                    obj.insert("allowlisted".into(), lossy(exe).into());
+                    obj.insert("rule_action".into(), a.action.as_str().into());
+                }
+                a.action = Action::Notify;
+            }
+        }
     }
 
     /// Facts every event has: the acting process and its parent.

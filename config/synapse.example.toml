@@ -38,8 +38,11 @@ model = 'set-your-local-model' # must be changed before enabling
 timeout_secs = 30              # 1..=300
 
 [response]
-auto_levels_max = 3            # 0..=6, further capped by the mode
-nft_block_ttl_secs = 3600      # 1..=604800
+auto_levels_max = 3            # 0..=6, further capped by the mode; higher levels wait for `synapsectl approve`
+nft_block_ttl_secs = 3600      # 1..=604800; network blocks expire on their own after this
+dry_run = false                # true: record what would be done in every mode, do nothing
+cgroup_root = '/sys/fs/cgroup' # cgroup v2 mount; suspects are frozen under synapse.slice/
+notify_dir = '/run/synapse-notify'  # spool read by synapse-notify in your desktop session
 
 [storage]
 max_db_mb = 512                # 16..=65536; oldest events are pruned beyond this

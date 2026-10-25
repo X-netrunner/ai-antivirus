@@ -412,3 +412,19 @@ fn replay_prints_one_json_line_per_alert() {
     assert_eq!(printed["rule_id"], "SYN-B-0001");
     assert_eq!(printed["action"], "freeze");
 }
+
+#[test]
+fn allowlisted_programs_are_capped_at_notify() {
+    use synapse_rules::rule::Action;
+    let mut r = Rig::new();
+    // makepkg is in the default engine.allow_exe; python3 is not
+    r.exec(S, 410, 1, "/usr/bin/makepkg", &["makepkg"], &[]);
+    r.exec(S, 411, 1, "/usr/bin/python3", &["python3"], &[]);
+    let a = r.write(2 * S, 410, "/etc/ld.so.preload", None);
+    assert_eq!(ids(&a), ["SYN-B-0004"]);
+    assert_eq!(a[0].action, Action::Notify);
+    assert_eq!(a[0].detail["allowlisted"], "/usr/bin/makepkg");
+    assert_eq!(a[0].detail["rule_action"], "freeze");
+    let b = r.write(2 * S, 411, "/etc/ld.so.preload", None);
+    assert_eq!(b[0].action, Action::Freeze);
+}

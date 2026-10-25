@@ -1,4 +1,4 @@
-//! Minimal fanotify bindings.
+//! Minimal fanotify bindings, plus pidfd and `SO_PEERCRED` wrappers for the responder (`process`, M4).
 //!
 //! This is the only crate in the workspace that contains `unsafe` code, and it
 //! is kept tiny on purpose. Everything else (event parsing, reading, path
@@ -17,6 +17,8 @@ use std::io::{self, Read};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+
+pub mod process;
 
 /// `fanotify_init` flag: close-on-exec for the group descriptor.
 pub const FAN_CLOEXEC: u32 = 0x0000_0001;

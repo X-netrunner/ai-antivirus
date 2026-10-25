@@ -56,7 +56,9 @@ pub fn build(cfg: &Config, rules_dir: &Path) -> Result<Engine, String> {
         u64::from(cfg.engine.scan_max_mb) * 1024 * 1024,
         cfg.engine.max_scans_per_sec,
     );
-    Ok(Engine::new(set.rules, files, cfg.engine.scan_on_write))
+    let mut engine = Engine::new(set.rules, files, cfg.engine.scan_on_write);
+    engine.set_allow_exe(cfg.engine.allow_exe.clone());
+    Ok(engine)
 }
 
 fn store_alert(store: &Store, a: &Alert) {

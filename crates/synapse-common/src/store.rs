@@ -348,6 +348,36 @@ pub struct AlertRow {
     pub acknowledged: bool,
 }
 
+const ALERT_COLS: &str =
+    "id, ts_ns, rule_id, severity, confidence, title, pid, proc_start_ns, detail, acknowledged";
+
+fn alert_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AlertRow> {
+    let pid: Option<i64> = r.get(6)?;
+    let start: Option<i64> = r.get(7)?;
+    let sev: String = r.get(3)?;
+    let detail: String = r.get(8)?;
+    let ack: i64 = r.get(9)?;
+    let proc_key = match (pid, start) {
+        (Some(p), Some(s)) => Some(ProcKey {
+            pid: u32::try_from(p).unwrap_or(0),
+            start_ns: u64::try_from(s).unwrap_or(0),
+        }),
+        _ => None,
+    };
+    Ok(AlertRow {
+        id: r.get(0)?,
+        ts_ns: u64::try_from(r.get::<_, i64>(1)?).unwrap_or(0),
+        rule_id: r.get(2)?,
+        // the CHECK constraint keeps this valid; fall back rather than fail a read
+        severity: sev.parse().unwrap_or(Severity::Medium),
+        confidence: r.get(4)?,
+        title: r.get(5)?,
+        proc_key,
+        detail: serde_json::from_str(&detail).unwrap_or(serde_json::Value::Null),
+        acknowledged: ack != 0,
+    })
+}
+
 /// What pacman says one file should be (spec 7, L0). `verified_ns` is 0 until the file's hash was checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustEntry {
@@ -364,49 +394,29 @@ impl Store {
     /// The newest `limit` alerts, oldest first.
     pub fn recent_alerts(&self, limit: usize) -> Result<Vec<AlertRow>> {
         let limit = i64::try_from(limit.min(MAX_RECENT)).unwrap_or(0);
-        let mut stmt = self.conn.prepare(
-            "SELECT id, ts_ns, rule_id, severity, confidence, title, pid, proc_start_ns, detail, acknowledged
-             FROM alerts ORDER BY id DESC LIMIT ?1",
-        )?;
-        let rows = stmt.query_map([limit], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, f64>(4)?,
-                r.get::<_, String>(5)?,
-                r.get::<_, Option<i64>>(6)?,
-                r.get::<_, Option<i64>>(7)?,
-                r.get::<_, String>(8)?,
-                r.get::<_, i64>(9)?,
-            ))
-        })?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (id, ts, rule_id, sev, confidence, title, pid, start, detail, ack) = row?;
-            let proc_key = match (pid, start) {
-                (Some(p), Some(s)) => Some(ProcKey {
-                    pid: u32::try_from(p).unwrap_or(0),
-                    start_ns: u64::try_from(s).unwrap_or(0),
-                }),
-                _ => None,
-            };
-            out.push(AlertRow {
-                id,
-                ts_ns: u64::try_from(ts).unwrap_or(0),
-                rule_id,
-                // the CHECK constraint keeps this valid; fall back rather than fail a read
-                severity: sev.parse().unwrap_or(Severity::Medium),
-                confidence,
-                title,
-                proc_key,
-                detail: serde_json::from_str(&detail).unwrap_or(serde_json::Value::Null),
-                acknowledged: ack != 0,
-            });
-        }
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {ALERT_COLS} FROM alerts ORDER BY id DESC LIMIT ?1"
+        ))?;
+        let mut out = stmt
+            .query_map([limit], alert_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         out.reverse();
         Ok(out)
+    }
+
+    pub fn get_alert(&self, id: i64) -> Result<Option<AlertRow>> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT {ALERT_COLS} FROM alerts WHERE id = ?1"))?;
+        let mut rows = stmt.query_map([id], alert_row)?;
+        Ok(rows.next().transpose()?)
+    }
+
+    /// Id of the newest alert (0 when there is none).
+    pub fn max_alert_id(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("SELECT COALESCE(MAX(id), 0) FROM alerts", [], |r| r.get(0))?)
     }
 
     /// Look a SHA-256 up in the hash table (L1).
@@ -759,8 +769,25 @@ impl Store {
 
     /// Alerts newer than `after_id` (oldest first), for followers such as the notifier and the AI spool.
     pub fn alerts_after(&self, after_id: i64, limit: usize) -> Result<Vec<AlertRow>> {
-        let all = self.recent_alerts(limit)?;
-        Ok(all.into_iter().filter(|a| a.id > after_id).collect())
+        let limit = i64::try_from(limit.min(MAX_RECENT)).unwrap_or(0);
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {ALERT_COLS} FROM alerts WHERE id > ?1 ORDER BY id ASC LIMIT ?2"
+        ))?;
+        let out = stmt
+            .query_map(params![after_id, limit], alert_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(out)
+    }
+
+    /// Actions waiting for a human decision, oldest first.
+    pub fn pending_actions(&self) -> Result<Vec<ActionRow>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {ACTION_COLS} FROM actions WHERE status = 'pending' ORDER BY id ASC LIMIT {MAX_RECENT}"
+        ))?;
+        let out = stmt
+            .query_map([], action_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(out)
     }
 }
 
@@ -807,6 +834,27 @@ mod tests {
     }
 
     #[test]
+    fn alerts_after_pages_forward_without_skipping() {
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(store.max_alert_id().unwrap(), 0);
+        for _ in 0..7 {
+            store.insert_alert(&alert(None)).unwrap();
+        }
+        let mut seen = Vec::new();
+        let mut cursor = 0;
+        loop {
+            let page = store.alerts_after(cursor, 3).unwrap();
+            let Some(last) = page.last() else { break };
+            cursor = last.id;
+            seen.extend(page.iter().map(|a| a.id));
+        }
+        assert_eq!(seen, (1..=7).collect::<Vec<i64>>());
+        assert_eq!(store.max_alert_id().unwrap(), 7);
+        assert_eq!(store.get_alert(3).unwrap().unwrap().id, 3);
+        assert!(store.get_alert(99).unwrap().is_none());
+    }
+
+    #[test]
     fn actions_state_and_proposals() {
         let store = Store::open_in_memory().unwrap();
         let t = serde_json::json!({"pid": 5});
@@ -821,6 +869,7 @@ mod tests {
                 ActionStatus::Pending,
             )
             .unwrap();
+        assert_eq!(store.pending_actions().unwrap()[0].id, id);
         store
             .update_action(
                 id,
@@ -831,6 +880,7 @@ mod tests {
                 11,
             )
             .unwrap();
+        assert!(store.pending_actions().unwrap().is_empty());
         let a = store.get_action(id).unwrap().unwrap();
         assert_eq!(a.status, ActionStatus::Executed);
         assert_eq!(a.undo.unwrap()["cgroup"], "/x");

@@ -1,6 +1,6 @@
 [package]
 name = "synapse-sys"
-description = "Synapse EDR: the only crate with unsafe code (small, audited fanotify FFI wrappers)"
+description = "Synapse EDR: the only crate with unsafe code (small, audited fanotify, pidfd and peer-credential FFI wrappers)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
