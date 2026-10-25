@@ -1,0 +1,4 @@
+# eBPF programs need `-Z build-std=core`, which is nightly-only.
+[toolchain]
+channel = "nightly"
+components = ["rust-src"]

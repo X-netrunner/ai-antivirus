@@ -1,0 +1,51 @@
+# Install as /usr/lib/systemd/system/synapse-sensord.service
+#
+# M2 sensor daemon: eBPF process/network sensor (with /proc polling as fallback)
+# + fanotify file-write sensor -> events.jsonl.
+# Not yet in this unit (arrives with the milestone that needs it):
+#   * Type=notify and WatchdogSec= (sd_notify heartbeats, M6)
+#   * SystemCallFilter= (to be added after tracing the real syscall set, M7)
+#
+# The eBPF object must exist at /usr/lib/synapse/synapse-ebpf.o, owned by root
+# and not writable by group or others (the sensor refuses it otherwise).
+#
+# No PrivateTmp=: fanotify marks the filesystem that contains each configured
+# path, and a private /tmp would hide the real one from the mark.
+
+[Unit]
+Description=Synapse EDR sensor daemon
+After=local-fs.target
+ConditionPathExists=/etc/synapse/synapse.toml
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/synapse-sensord --config /etc/synapse/synapse.toml
+Restart=always
+RestartSec=2
+User=root
+UMask=0027
+
+# fanotify needs CAP_SYS_ADMIN. Loading eBPF programs needs CAP_BPF, and
+# attaching them to tracepoints and kprobes needs CAP_PERFMON. Reading
+# /proc/<pid>/exe and /proc/<pid>/cwd of other users' processes still needs
+# CAP_SYS_PTRACE even with eBPF (the kernel programs do not report the resolved
+# executable path or the working directory; see README, M2 decisions).
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_BPF CAP_PERFMON CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/log/synapse
+ProtectHome=read-only
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
