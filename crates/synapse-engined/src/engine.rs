@@ -81,6 +81,13 @@ fn lossy(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
+fn finding_sha(f: &Finding) -> String {
+    match f {
+        Finding::Modified { actual, .. } => actual.to_string(),
+        Finding::KnownBad { sha256, .. } | Finding::Yara { sha256, .. } => sha256.to_string(),
+    }
+}
+
 fn argv_json(argv: &[OsString]) -> Value {
     Value::Array(
         argv.iter()
@@ -529,7 +536,8 @@ impl Engine {
                     )
                 }
             };
-            let dk = format!("{rule_id}|{}", lossy(path));
+            // the file's hash is part of the key: a file tampered with again, differently, alerts again
+            let dk = format!("{rule_id}|{}|{}", lossy(path), finding_sha(f));
             if !self.first_time(dk, ts) {
                 continue;
             }

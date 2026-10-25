@@ -10,11 +10,12 @@
 //!   file changed again since).
 //! - The archive member is extracted with `bsdtar -xOf ARCHIVE MEMBER` (no shell; both names are checked first).
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{chown, DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -40,6 +41,8 @@ pub struct RestoreRecord {
     pub before_mode: u32,
     pub before_uid: u32,
     pub before_gid: u32,
+    /// Modification time (whole seconds) of the file before; put back on undo.
+    pub before_mtime_s: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -233,7 +236,7 @@ impl Restorer {
         // the evidence: whatever is there now
         let current = fs::symlink_metadata(path).ok();
         let (mut evidence, mut before_hash) = (None, None);
-        let (mut b_mode, mut b_uid, mut b_gid) = (0o644, 0, 0);
+        let (mut b_mode, mut b_uid, mut b_gid, mut b_mtime) = (0o644, 0, 0, 0i64);
         if let Some(m) = &current {
             if !m.is_file() {
                 return Err(format!(
@@ -241,7 +244,7 @@ impl Restorer {
                     path.display()
                 ));
             }
-            (b_mode, b_uid, b_gid) = (m.mode() & 0o7777, m.uid(), m.gid());
+            (b_mode, b_uid, b_gid, b_mtime) = (m.mode() & 0o7777, m.uid(), m.gid(), m.mtime());
             fs::DirBuilder::new()
                 .recursive(true)
                 .mode(0o700)
@@ -271,7 +274,12 @@ impl Restorer {
             evidence = Some(name);
         }
 
-        write_atomically(path, &data, entry.mode, entry.uid, entry.gid, id)?;
+        write_atomically(
+            path,
+            &data,
+            (entry.mode, entry.uid, entry.gid, entry.mtime_s),
+            id,
+        )?;
         Ok(RestoreRecord {
             path: path.to_string_lossy().into_owned(),
             package: pkg.name,
@@ -283,6 +291,7 @@ impl Restorer {
             before_mode: b_mode,
             before_uid: b_uid,
             before_gid: b_gid,
+            before_mtime_s: b_mtime,
         })
     }
 
@@ -315,9 +324,12 @@ impl Restorer {
                 let r = write_atomically(
                     path,
                     &data,
-                    rec.before_mode,
-                    rec.before_uid,
-                    rec.before_gid,
+                    (
+                        rec.before_mode,
+                        rec.before_uid,
+                        rec.before_gid,
+                        rec.before_mtime_s,
+                    ),
                     id,
                 );
                 let _ = fs::set_permissions(&ev, fs::Permissions::from_mode(0o000));
@@ -327,14 +339,13 @@ impl Restorer {
     }
 }
 
-/// Write `data` next to `path` and rename it over: the target is never half written. Owner changes need root; as an
-/// unprivileged user (tests) the file keeps the caller as owner.
+/// Write `data` next to `path` and rename it over: the target is never half written. `meta` = (mode, uid, gid, mtime in
+/// seconds): pacman's own check (`pacman -Qkk`) compares the modification time too, so a restored file carries the
+/// package's. Owner changes need root; as an unprivileged user (tests) the file keeps the caller as owner.
 fn write_atomically(
     path: &Path,
     data: &[u8],
-    mode: u32,
-    uid: u32,
-    gid: u32,
+    (mode, uid, gid, mtime_s): (u32, u32, u32, i64),
     id: i64,
 ) -> Result<(), String> {
     let dir = path.parent().ok_or("no parent directory")?;
@@ -346,8 +357,10 @@ fn write_atomically(
             .mode(0o600)
             .open(&tmp)?;
         f.write_all(data)?;
+        if let Ok(secs) = u64::try_from(mtime_s) {
+            f.set_modified(UNIX_EPOCH + Duration::from_secs(secs))?;
+        }
         f.sync_all()?;
-        drop(File::open(&tmp)?);
         let _ = chown(&tmp, Some(uid), Some(gid));
         fs::set_permissions(&tmp, fs::Permissions::from_mode(mode & 0o7777))?;
         fs::rename(&tmp, path)
@@ -362,6 +375,7 @@ fn write_atomically(
 mod tests {
     use super::*;
     use flate2::write::GzEncoder;
+    use std::fs::File;
 
     struct Rig {
         _dir: tempfile::TempDir,
@@ -446,6 +460,8 @@ mod tests {
         );
         assert_eq!(rec.package, "tool");
         assert_eq!(rec.before_mode, 0o4755);
+        // the package's recorded modification time (time=1.0 in the fixture's mtree), as pacman -Qkk expects
+        assert_eq!(fs::metadata(&r.target).unwrap().mtime(), 1);
         let ev = r.root.join("restore-evidence/7.bin");
         assert_eq!(fs::metadata(&ev).unwrap().permissions().mode() & 0o777, 0);
         // no temporary file left behind
