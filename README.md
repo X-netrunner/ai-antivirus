@@ -236,7 +236,9 @@ Requirements: cgroup v2 (the Arch default; `cgroup.kill` needs kernel 5.14+), `n
   - the alert that existed before the first start was left alone;
   - `synapsectl responder-status` from uid 1000 was refused by `SO_PEERCRED`;
   - `synapse-notify --print` showed the spooled notification with its markup escaped.
-- **Not yet done: a run as root in the test VM.** That run needs to cover a real cgroup freeze, thaw and `cgroup.kill`, a real `nft` table, quarantine and restore of a root-owned file, and the unit's capability set. Do it in the VM before using `contain` or `enforce` on this machine.
+- **Root run in the test VM** (Arch, kernel 7.2.11, real cgroup v2 and nftables; alerts written into the database, harmless targets):
+  - `contain`: a `sleep` process was frozen into `synapse.slice/suspect-1` (`frozen 1`), and `undo` thawed it and moved it back to its session scope. Another `sleep` was killed through `cgroup.kill`. A kill alert with a wrong start time (PID reuse) was refused. Quarantine and block were recorded as dry runs (above level 3).
+  - `enforce`: quarantine of a root-owned EICAR file waited as `pending`; after `approve` the file was gone and `quarantine/1.bin` was mode 000, and `undo` brought it back with mode 640, owner root and the original mtime. A block of 192.0.2.10 waited, was added to `inet synapse` with a 1 h timeout, and `undo` removed it. A loopback block was refused even when approved. `reject` works. No errors in the log.
 
 ## Decisions and additions beyond the spec
 
