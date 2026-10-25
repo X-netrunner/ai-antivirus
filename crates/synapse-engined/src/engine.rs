@@ -278,10 +278,8 @@ impl Engine {
                 let detail = json!({"from": lossy(from), "to": lossy(to), "exe": exe});
                 self.apply(&mut out, matched, *proc, ts, Some(to), None, &detail);
             }
-            Event::ModuleLoad { .. }
-            | Event::Ptrace { .. }
-            | Event::Tamper { .. }
-            | Event::SensorHealth { .. } => {}
+            Event::Tamper { what } => out.push(crate::selfguard::from_tamper(ts, what)),
+            Event::ModuleLoad { .. } | Event::Ptrace { .. } | Event::SensorHealth { .. } => {}
         }
         self.cap_allowlisted(&mut out);
         self.stats.alerts += out.len() as u64;

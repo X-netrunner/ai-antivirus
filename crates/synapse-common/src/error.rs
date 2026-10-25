@@ -33,6 +33,9 @@ pub enum Error {
     #[error("database is not in WAL mode (got {0:?})")]
     NotWal(String),
 
+    #[error("self-protection: {0}")]
+    SelfProtection(String),
+
     #[error("logging initialisation failed: {0}")]
     Logging(String),
 }

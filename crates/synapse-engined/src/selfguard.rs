@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 use synapse_common::config::Config;
+use synapse_common::event::TamperKind;
 use synapse_common::model::Severity;
 use synapse_common::store::Store;
 use synapse_rules::rule::Action;
@@ -68,6 +69,53 @@ pub fn bundle_invalid(ts_ns: u64, problems: &str) -> Alert {
         "The rules are not covered by a valid signature; the running rules stay",
         json!({"problems": problems}),
     )
+}
+
+/// An alert for a `Tamper` event the sensor wrote.
+pub fn from_tamper(ts_ns: u64, what: &TamperKind) -> Alert {
+    match what {
+        TamperKind::ProbeDetached => alert(
+            ts_ns,
+            "SYN-T-0010",
+            Severity::High,
+            0.9,
+            "The eBPF probes stopped reporting; the sensor restarted to attach them again",
+            json!({}),
+        ),
+        TamperKind::PtraceAttach { from } => alert(
+            ts_ns,
+            "SYN-T-0011",
+            Severity::High,
+            0.9,
+            "A debugger is attached to the sensor",
+            json!({"tracer_pid": from.pid}),
+        ),
+        TamperKind::BinaryModified { path } | TamperKind::ConfigModified { path } => alert(
+            ts_ns,
+            "SYN-T-0012",
+            Severity::Critical,
+            0.9,
+            "The sensor reports that one of Synapse's files was modified",
+            json!({"path": path.display().to_string()}),
+        ),
+        TamperKind::RuleBundleInvalid => bundle_invalid(ts_ns, "reported by the sensor"),
+        TamperKind::SensorSilent => alert(
+            ts_ns,
+            "SYN-T-0003",
+            Severity::High,
+            0.8,
+            "The sensor has gone silent",
+            json!({}),
+        ),
+        TamperKind::SignalReceived { from, signal } => alert(
+            ts_ns,
+            "SYN-T-0013",
+            Severity::High,
+            0.7,
+            "A signal was sent to a Synapse process",
+            json!({"from_pid": from.pid, "signal": signal}),
+        ),
+    }
 }
 
 /// The tracer's pid from the text of `/proc/<pid>/status` (0 = none).

@@ -15,6 +15,7 @@ pub mod fan;
 pub mod poller;
 pub mod procinfo;
 pub mod proctree;
+pub mod selfwatch;
 pub mod sink;
 pub mod tracefs;
 pub mod translate;
@@ -33,6 +34,7 @@ use synapse_common::{Error, Result};
 use tracing::{error, info, warn};
 
 use crate::poller::Poller;
+use crate::selfwatch::{SelfWatch, Verdict};
 use crate::sink::{Sink, Stamped};
 
 /// Capacity of the sensor-to-writer channel.
@@ -221,12 +223,30 @@ pub fn run(cfg: &Config, shutdown: &Arc<AtomicBool>) -> Result<()> {
     let mut next_health = Instant::now() + HEALTH_INTERVAL;
     let mut heartbeat = Heartbeat::from_env();
     heartbeat.ready("collecting events");
+    let mut selfwatch = SelfWatch::new();
+    let mut restart_reason: Option<&'static str> = None;
     loop {
         heartbeat.tick();
         match rx.recv_timeout(WRITER_TICK) {
-            Ok((ts_ns, event)) => writer.write(ts_ns, event),
+            Ok((ts_ns, event)) => {
+                selfwatch.saw(&event);
+                writer.write(ts_ns, event);
+            }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
+        }
+        match selfwatch.poll(
+            sink.stats.ebpf_alive.load(Ordering::Relaxed),
+            Instant::now(),
+        ) {
+            Verdict::Quiet => {}
+            Verdict::Report(event) => writer.write(synapse_common::event::now_ns(), event),
+            Verdict::Restart(event) => {
+                error!("the eBPF probes stopped reporting (the canary exec never arrived): restarting to attach them again");
+                writer.write(synapse_common::event::now_ns(), event);
+                restart_reason = Some("the eBPF probes stopped reporting");
+                break;
+            }
         }
         if Instant::now() >= next_health {
             write_health(&mut writer);
@@ -250,5 +270,8 @@ pub fn run(cfg: &Config, shutdown: &Arc<AtomicBool>) -> Result<()> {
         }
     }
     info!("sensor daemon stopped");
-    Ok(())
+    match restart_reason {
+        Some(why) => Err(Error::SelfProtection(why.to_owned())),
+        None => Ok(()),
+    }
 }

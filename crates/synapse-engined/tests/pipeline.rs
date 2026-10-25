@@ -408,6 +408,40 @@ fn writes_to_synapses_own_files_are_alerts_unless_pacman_or_the_cli_wrote_them()
 }
 
 #[test]
+fn tamper_events_from_the_sensor_become_alerts() {
+    use synapse_common::event::TamperKind;
+    let mut r = Rig::new();
+    let a = r.feed(
+        S,
+        Event::Tamper {
+            what: TamperKind::ProbeDetached,
+        },
+    );
+    assert_eq!(ids(&a), ["SYN-T-0010"]);
+    assert_eq!(a[0].layer, "self-protection");
+    let a = r.feed(
+        2 * S,
+        Event::Tamper {
+            what: TamperKind::PtraceAttach { from: k(77) },
+        },
+    );
+    assert_eq!(
+        (ids(&a), a[0].detail["tracer_pid"].as_u64()),
+        (vec!["SYN-T-0011"], Some(77))
+    );
+    // health lines are not tamper
+    assert!(r
+        .feed(
+            3 * S,
+            Event::SensorHealth {
+                dropped: 0,
+                degraded: false
+            }
+        )
+        .is_empty());
+}
+
+#[test]
 fn mining_pool_port() {
     let mut r = Rig::new();
     r.exec(S, 600, 1, "/home/u/.x/xm", &["xm"], &[]);
