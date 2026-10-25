@@ -118,6 +118,20 @@ impl Engine {
         }
     }
 
+    /// Swap in a new rule set (rules edited or approved while running). Window counters of rules that stay are lost;
+    /// the process table is kept.
+    pub fn replace_rules(&mut self, rules: Vec<Rule>) {
+        self.windows = rules
+            .iter()
+            .map(|r| match (&r.threshold, r.window_secs) {
+                (Some(t), Some(w)) => Some(Windows::new(w, t.clone())),
+                _ => None,
+            })
+            .collect();
+        self.wants_setuid = rules.iter().any(|r| r.matcher.wants_setuid());
+        self.rules = rules;
+    }
+
     /// Replace how "a pacman transaction runs" is decided (tests, replay).
     pub fn set_pacman_probe(&mut self, f: impl Fn() -> bool + Send + 'static) {
         self.pacman_active = Box::new(f);

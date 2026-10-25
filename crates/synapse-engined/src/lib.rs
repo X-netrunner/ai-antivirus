@@ -8,12 +8,13 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod ai;
 pub mod engine;
 pub mod files;
 pub mod procs;
 
 use std::io::BufRead;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -34,6 +35,49 @@ const WARMUP_LINES: usize = 200_000;
 const POLL: Duration = Duration::from_millis(200);
 const SWEEP_EVERY: Duration = Duration::from_secs(10);
 const STATS_EVERY: Duration = Duration::from_secs(300);
+const AI_EVERY: Duration = Duration::from_secs(2);
+
+/// Names, sizes and times of the behavior rule files: changes when a rule is added, edited or removed.
+fn rules_fingerprint(rules_dir: &Path) -> Vec<(PathBuf, u64, std::time::SystemTime)> {
+    fn walk(dir: &Path, out: &mut Vec<(PathBuf, u64, std::time::SystemTime)>, depth: u32) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd.filter_map(|e| e.ok()) {
+            let p = e.path();
+            let Ok(m) = e.metadata() else { continue };
+            if m.is_dir() && depth < 4 {
+                walk(&p, out, depth + 1);
+            } else if m.is_file() && p.extension().is_some_and(|x| x == "toml") {
+                out.push((p, m.len(), m.modified().unwrap_or(std::time::UNIX_EPOCH)));
+            }
+        }
+    }
+    let mut v = Vec::new();
+    walk(&rules_dir.join("behavior"), &mut v, 0);
+    v.sort();
+    v
+}
+
+/// Load changed rules without a restart. A rule set that does not validate is refused and the running rules stay.
+fn reload_rules_if_changed(
+    cfg: &Config,
+    engine: &mut Engine,
+    seen: &mut Vec<(PathBuf, u64, std::time::SystemTime)>,
+) {
+    let now = rules_fingerprint(&cfg.engine.rules_dir);
+    if now == *seen {
+        return;
+    }
+    *seen = now;
+    match RuleSet::load_dir(&cfg.engine.rules_dir.join("behavior")) {
+        Ok(set) => {
+            info!(behavior_rules = set.rules.len(), "behavior rules reloaded");
+            engine.replace_rules(set.rules);
+        }
+        Err(e) => warn!(error = %e, "changed rules are invalid; the running rules stay"),
+    }
+}
 
 /// Load the behavior rules and YARA rules under `rules_dir` and build an engine. Broken rules are an error: an engine that
 /// silently runs without its rules is worse than one that does not start.
@@ -61,7 +105,7 @@ pub fn build(cfg: &Config, rules_dir: &Path) -> Result<Engine, String> {
     Ok(engine)
 }
 
-fn store_alert(store: &Store, a: &Alert) {
+fn store_alert(store: &Store, a: &Alert) -> Option<i64> {
     let mut detail = a.detail.clone();
     if let Some(obj) = detail.as_object_mut() {
         obj.insert("action".into(), a.action.as_str().into());
@@ -77,8 +121,12 @@ fn store_alert(store: &Store, a: &Alert) {
         event_id: None,
         detail,
     };
-    if let Err(e) = store.insert_alert(&row) {
-        error!(error = %e, rule = %a.rule_id, "cannot store alert");
+    match store.insert_alert(&row) {
+        Ok(id) => Some(id),
+        Err(e) => {
+            error!(error = %e, rule = %a.rule_id, "cannot store alert");
+            None
+        }
     }
 }
 
@@ -113,7 +161,9 @@ pub fn run(cfg: &Config, shutdown: &AtomicBool) -> Result<(), String> {
     }
     info!(log = %log.display(), mode = cfg.general.mode.as_str(), "engine running (alerts only: synapse-responderd acts on them)");
 
-    let (mut last_sweep, mut last_stats) = (Instant::now(), Instant::now());
+    let (mut last_sweep, mut last_stats, mut last_ai) =
+        (Instant::now(), Instant::now(), Instant::now());
+    let mut rules_seen = rules_fingerprint(&cfg.engine.rules_dir);
     let mut bad_lines = 0u64;
     while !shutdown.load(Ordering::Relaxed) {
         let lines = match follower.poll() {
@@ -133,12 +183,31 @@ pub fn run(cfg: &Config, shutdown: &AtomicBool) -> Result<(), String> {
             };
             for a in engine.handle(&mut store, &env) {
                 warn!(rule = %a.rule_id, severity = a.severity.as_str(), title = %a.title, pid = a.proc_key.map(|k| k.pid), action = a.action.as_str(), "ALERT");
-                store_alert(&store, &a);
+                if let Some(id) = store_alert(&store, &a) {
+                    if let Ok(Some(row)) = store.get_alert(id) {
+                        ai::spool_alert(cfg, &row);
+                    }
+                }
             }
         }
         if last_sweep.elapsed() >= SWEEP_EVERY {
             engine.sweep(now_ns());
             last_sweep = Instant::now();
+        }
+        if last_ai.elapsed() >= AI_EVERY {
+            last_ai = Instant::now();
+            if cfg.ai.enabled {
+                let n = ai::import_answers(cfg, &store);
+                if n.notes + n.proposals + n.auto_rejected > 0 {
+                    info!(
+                        notes = n.notes,
+                        proposals = n.proposals,
+                        auto_rejected = n.auto_rejected,
+                        "analyzer answers imported"
+                    );
+                }
+            }
+            reload_rules_if_changed(cfg, &mut engine, &mut rules_seen);
         }
         if last_stats.elapsed() >= STATS_EVERY {
             let (e, f) = (engine.stats, engine.files.stats);

@@ -1864,6 +1864,7 @@ dependencies = [
  "flate2",
  "serde_json",
  "signal-hook",
+ "synapse-ai",
  "synapse-common",
  "synapse-rules",
  "tempfile",
