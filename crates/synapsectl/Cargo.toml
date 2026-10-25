@@ -16,6 +16,8 @@ synapse-rules = { path = "../synapse-rules" }
 toml.workspace = true
 
 [dev-dependencies]
+flate2.workspace = true
+sha2.workspace = true
 tempfile.workspace = true
 
 [lints]

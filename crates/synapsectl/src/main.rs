@@ -9,6 +9,7 @@
 
 mod advice;
 mod detect;
+mod pacman;
 mod render;
 mod respond;
 mod sign;
@@ -224,6 +225,24 @@ enum Command {
         #[arg(long)]
         dir: Option<PathBuf>,
     },
+    /// pacman PreTransaction hook: confirms Synapse stays passive while pacman holds its lock.
+    PacmanBegin,
+    /// pacman PostTransaction hook: package names on stdin; refreshes the trust cache for them.
+    PacmanEnd {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// pacman's local database (default /var/lib/pacman/local).
+        #[arg(long)]
+        pacman_local: Option<PathBuf>,
+    },
+    /// Look at a PKGBUILD directory (the PKGBUILD and its .install and patch files) before building it.
+    /// Exits with status 1 when something was found.
+    ScanPkgbuild {
+        dir: PathBuf,
+        /// Rules directory instead of `engine.rules_dir`.
+        #[arg(long)]
+        rules: Option<PathBuf>,
+    },
     /// Reject a pending rule proposal.
     RejectRule {
         id: i64,
@@ -315,6 +334,25 @@ fn main() -> ExitCode {
             )
             .map(|()| false),
         ),
+        Command::PacmanBegin => Some(pacman::pacman_begin().map(|()| false)),
+        Command::PacmanEnd { db, pacman_local } => {
+            if pacman::stdin_is_terminal() {
+                println!("synapse: pacman-end reads package names from stdin (the pacman hook passes them)");
+                return ExitCode::SUCCESS;
+            }
+            Some(
+                pacman::pacman_end(
+                    &cli.config,
+                    db.as_deref(),
+                    pacman_local.as_deref(),
+                    &mut std::io::stdin().lock(),
+                )
+                .map(|()| false),
+            )
+        }
+        Command::ScanPkgbuild { dir, rules } => {
+            Some(pacman::scan_pkgbuild(&cli.config, dir, rules.as_deref()))
+        }
         Command::Keygen { dir } => Some(sign::keygen(dir).map(|()| false)),
         Command::RulesSign { key, dir } => {
             Some(sign::rules_sign(&cli.config, dir.as_deref(), key).map(|()| false))
@@ -425,6 +463,9 @@ fn run(cli: &Cli) -> Result<(), Error> {
         | Command::ProposalShow { .. }
         | Command::ApproveRule { .. }
         | Command::RejectRule { .. }
+        | Command::PacmanBegin
+        | Command::PacmanEnd { .. }
+        | Command::ScanPkgbuild { .. }
         | Command::Keygen { .. }
         | Command::RulesSign { .. }
         | Command::RulesVerify { .. }
