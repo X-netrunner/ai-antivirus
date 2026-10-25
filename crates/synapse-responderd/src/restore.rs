@@ -5,7 +5,7 @@
 //!   from the alert or the cached archive. The archive is only a place to read bytes from; if the bytes do not hash to the
 //!   recorded value nothing is touched.
 //! - Only files a package owns and does not mark as editable configuration (`%BACKUP%`) can be restored.
-//! - What was there before is kept as evidence (`<state_dir>/restore-evidence/<id>.bin`, mode 000) and the new file is
+//! - What was there before is kept as evidence (`<private_dir>/restore-evidence/<id>.bin`, mode 000) and the new file is
 //!   put in place with a rename, so there is never a half-written file. Undo puts the evidence back (and refuses if the
 //!   file changed again since).
 //! - The archive member is extracted with `bsdtar -xOf ARCHIVE MEMBER` (no shell; both names are checked first).
@@ -86,11 +86,11 @@ fn desc_fields(desc: &str) -> (Option<String>, Option<String>, Option<String>) {
 }
 
 impl Restorer {
-    pub fn new(state_dir: &Path) -> Restorer {
+    pub fn new(private_dir: &Path) -> Restorer {
         Restorer {
             pacman_local: PathBuf::from(mtree::PACMAN_LOCAL),
             cache_dirs: vec![PathBuf::from("/var/cache/pacman/pkg")],
-            evidence_dir: state_dir.join("restore-evidence"),
+            evidence_dir: private_dir.join("restore-evidence"),
             bsdtar: PathBuf::from("/usr/bin/bsdtar"),
         }
     }

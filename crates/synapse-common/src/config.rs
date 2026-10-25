@@ -178,7 +178,7 @@ impl Default for EngineConfig {
             .map(PathBuf::from)
             .collect(),
             max_actions_per_minute: 3,
-            rules_dir: PathBuf::from("/var/lib/synapse/rules"),
+            rules_dir: PathBuf::from("/etc/synapse/rules"),
             scan_max_mb: 32,
             yara_timeout_ms: 2000,
             scan_on_write: true,
@@ -225,7 +225,7 @@ impl Default for AiConfig {
             timeout_secs: 30,
             max_per_hour: 60,
             min_severity: Severity::Medium,
-            corpus: PathBuf::from("/var/lib/synapse/corpus/benign.jsonl"),
+            corpus: PathBuf::from("/etc/synapse/corpus/benign.jsonl"),
         }
     }
 }
@@ -294,6 +294,9 @@ pub struct PathsConfig {
     /// The analyzer's own folder (`spool/` and `out/`), apart from `state_dir` so `synapse-ai` cannot reach the database
     /// or the event log. Added in M5.
     pub ai_dir: PathBuf,
+    /// Root-only data: quarantined files and the evidence copies a restore keeps. Its own folder, not inside `state_dir`:
+    /// the engine owns `state_dir`, and a folder the engine could rename or swap must never hold what root works on.
+    pub private_dir: PathBuf,
 }
 
 impl Default for PathsConfig {
@@ -303,6 +306,7 @@ impl Default for PathsConfig {
             log_dir: PathBuf::from("/var/log/synapse"),
             run_dir: PathBuf::from("/run/synapse"),
             ai_dir: PathBuf::from("/var/lib/synapse-ai"),
+            private_dir: PathBuf::from("/var/lib/synapse-private"),
         }
     }
 }
@@ -381,7 +385,12 @@ impl Config {
 
     /// Where quarantined files are kept (never deleted automatically).
     pub fn quarantine_dir(&self) -> PathBuf {
-        self.paths.state_dir.join("quarantine")
+        self.paths.private_dir.join("quarantine")
+    }
+
+    /// Where a restore keeps what it replaced (never deleted automatically).
+    pub fn restore_evidence_dir(&self) -> PathBuf {
+        self.paths.private_dir.join("restore-evidence")
     }
 
     /// The responder's control socket (`synapsectl approve`, `undo` ...).
@@ -522,6 +531,7 @@ impl Config {
         check_abs(&mut p, "paths.log_dir", &self.paths.log_dir);
         check_abs(&mut p, "paths.run_dir", &self.paths.run_dir);
         check_abs(&mut p, "paths.ai_dir", &self.paths.ai_dir);
+        check_abs(&mut p, "paths.private_dir", &self.paths.private_dir);
         check_abs(&mut p, "response.cgroup_root", &self.response.cgroup_root);
         check_abs(&mut p, "response.notify_dir", &self.response.notify_dir);
 

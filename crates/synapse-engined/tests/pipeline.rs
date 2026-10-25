@@ -379,7 +379,7 @@ fn writes_to_synapses_own_files_are_alerts_unless_pacman_or_the_cli_wrote_them()
     for p in [
         "/usr/lib/synapse/synapse-ebpf.o",
         "/etc/synapse/synapse.toml",
-        "/var/lib/synapse/rules/behavior/00-shipped.toml",
+        "/etc/synapse/rules/behavior/00-shipped.toml",
         "/usr/bin/synapse-sensord",
     ] {
         assert_eq!(ids(&r.write(2 * S, 900, p, None)), ["SYN-B-0020"], "{p}");
@@ -388,7 +388,7 @@ fn writes_to_synapses_own_files_are_alerts_unless_pacman_or_the_cli_wrote_them()
         r.write(
             3 * S,
             901,
-            "/var/lib/synapse/rules/behavior/local/ai-3.toml",
+            "/etc/synapse/rules/behavior/local/ai-3.toml",
             None
         )
         .is_empty(),

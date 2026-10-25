@@ -24,7 +24,7 @@ event_log_keep = 5             # 1..=100; rotated files events.jsonl.1 .. .N
 # Never acted on by the engine or the responder.
 allow_exe = ['/usr/bin/pacman', '/usr/bin/makepkg', '/usr/lib/systemd/systemd']
 max_actions_per_minute = 3     # 1..=60; exceeding it trips the circuit breaker
-rules_dir = '/var/lib/synapse/rules'  # behavior/**/*.toml (behavior rules) and yara/*.yar
+rules_dir = '/etc/synapse/rules'  # behavior/**/*.toml (behavior rules) and yara/*.yar
 scan_max_mb = 32               # 1..=4096; larger files are scanned only by `synapsectl scan`
 yara_timeout_ms = 2000         # 50..=60000; per scan
 scan_on_write = true           # scan written files that are executable or in /tmp, /dev/shm, /var/tmp, ~/Downloads
@@ -42,7 +42,7 @@ model = 'set-your-local-model' # must be changed before enabling
 timeout_secs = 30              # 1..=300
 max_per_hour = 60              # 1..=3600; alerts sent to the model per hour
 min_severity = 'medium'        # low | medium | high | critical: alerts at or above this are analyzed
-corpus = '/var/lib/synapse/corpus/benign.jsonl'  # recording of ordinary activity; a proposed rule that fires on it is rejected
+corpus = '/etc/synapse/corpus/benign.jsonl'  # recording of ordinary activity; a proposed rule that fires on it is rejected
 
 [response]
 auto_levels_max = 3            # 0..=6, further capped by the mode; higher levels wait for `synapsectl approve`
@@ -63,3 +63,4 @@ state_dir = '/var/lib/synapse'
 log_dir = '/var/log/synapse'
 run_dir = '/run/synapse'
 ai_dir = '/var/lib/synapse-ai'   # the analyzer's spool/ and out/, apart from state_dir
+private_dir = '/var/lib/synapse-private'  # root only: quarantine/ and restore-evidence/ (never inside state_dir, which the engine owns)

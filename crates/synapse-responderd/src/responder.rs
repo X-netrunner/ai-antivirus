@@ -101,7 +101,7 @@ impl System {
             procfs: ProcFs::system(),
             cgroups: Cgroups::new(&cfg.response.cgroup_root),
             quarantine: Quarantine::new(cfg.quarantine_dir()),
-            restorer: Restorer::new(&cfg.paths.state_dir),
+            restorer: Restorer::new(&cfg.paths.private_dir),
             nft: Box::new(nft::NftCmd),
             notifier: Notifier::new(&cfg.response.notify_dir),
             pacman_active: Box::new(synapse_rules::mtree::pacman_active),

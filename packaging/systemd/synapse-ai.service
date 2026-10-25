@@ -1,8 +1,8 @@
 # Install as /usr/lib/systemd/system/synapse-ai.service
 #
 # M5 AI analyzer: reads alert bundles from /var/lib/synapse-ai/spool, asks the local Ollama, leaves the raw answer in
-# /var/lib/synapse-ai/out. Advice only. It cannot see the database, the event log or the rules (they are not in its
-# folder and it is not in their groups), runs no commands, and can only talk to localhost.
+# /var/lib/synapse-ai/out. Advice only. It cannot see the database or the event log (they are not in its folder and it
+# is not in their groups), runs no commands, and can only talk to localhost.
 # Enable only after setting [ai] enabled = true and a real model in /etc/synapse/synapse.toml.
 
 [Unit]
@@ -25,7 +25,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ReadOnlyPaths=/var/lib/synapse-ai/spool
 ReadWritePaths=/var/lib/synapse-ai/out
-InaccessiblePaths=/var/lib/synapse /var/log/synapse /run/synapse /home /root
+InaccessiblePaths=/var/lib/synapse /var/lib/synapse-private /var/log/synapse /run/synapse /home /root
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectHome=yes

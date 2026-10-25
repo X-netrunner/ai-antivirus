@@ -7,7 +7,8 @@
 # Runs as the unprivileged `synapse` user with no capabilities (spec 4). Consequences:
 #   * it can only scan files `synapse` may read: system binaries, world-readable files in /tmp, /dev/shm, /var/tmp;
 #     not files inside home directories with mode 0700 (the Arch default). `synapsectl scan` as root covers those.
-#   * the rules in /var/lib/synapse/rules are root-owned (tmpfiles.d), so the engine reads but cannot change them.
+#   * the rules in /etc/synapse/rules are root-owned (tmpfiles.d, and /etc/synapse is root-owned), so the engine reads but
+#     cannot change them.
 #
 # No MemoryDenyWriteExecute=: YARA-X compiles rule conditions to native code at load time (wasmtime), which needs
 # writable-then-executable memory.

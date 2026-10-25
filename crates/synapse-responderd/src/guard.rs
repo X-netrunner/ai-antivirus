@@ -28,7 +28,13 @@ pub struct Context<'a> {
     pub self_pid: u32,
 }
 
-const SYNAPSE_DIRS: &[&str] = &["/usr/lib/synapse/", "/etc/synapse/", "/var/lib/synapse/"];
+const SYNAPSE_DIRS: &[&str] = &[
+    "/usr/lib/synapse/",
+    "/etc/synapse/",
+    "/var/lib/synapse/",
+    "/var/lib/synapse-ai/",
+    "/var/lib/synapse-private/",
+];
 const SYSTEMD_PREFIXES: &[&str] = &["/usr/lib/systemd/", "/usr/bin/systemd", "/usr/bin/udevadm"];
 /// Files under these are never quarantined: the system would not boot or Synapse would lose itself.
 const FILE_NEVER: &[&str] = &[
@@ -41,6 +47,8 @@ const FILE_NEVER: &[&str] = &[
     "/usr/lib/synapse/",
     "/etc/synapse/",
     "/var/lib/synapse/",
+    "/var/lib/synapse-ai/",
+    "/var/lib/synapse-private/",
     "/var/lib/pacman/",
 ];
 
