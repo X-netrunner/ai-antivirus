@@ -4,6 +4,27 @@ AI-assisted EDR and antivirus for Arch Linux. Design: see the AI Antivirus maste
 
 **Status: M0 to M7 are built, tested, and have been run as root as an installed package in an Arch test VM (kernel 7.2). M8 (test and soak) was done as far as one session allows; the two-week soak on your own workflow has not happened.** What exists: a sensor (eBPF with a `/proc` fallback, plus fanotify), an engine (pacman trust, hash table, YARA-X, behavior rules), a responder (notify, cgroup freeze, kill, quarantine, nftables block, restore from the pacman cache; each with a dry run, an undo record, approval above `response.auto_levels_max`, a per-minute budget and a circuit breaker), an optional AI analyzer that only advises and proposes rules, self-protection (systemd watchdog, signed rules, own-file checks, a canary for the eBPF probes), and an Arch package with pacman hooks. The default mode is `alert-only`: nothing acts on your system until you change `general.mode`. Install it as a package ([M7](#m7-packaging)), start with alert-only, and read [Known risks](#known-risks) before you move on. Enforcement has only been exercised against harmless test targets, never against real malware.
 
+## Part of Halcyon
+
+AI Antivirus is one of three companion projects of [Halcyon](https://github.com/X-netrunner/Halcyon), a Hyprland desktop, together with
+[ai-firewall](https://github.com/X-netrunner/ai-firewall) and the local assistant [Luna](https://github.com/X-netrunner/LUNA-AI). **It works on its own** (an Arch package, three small
+services and a command line), and it fits best with the other two:
+
+- **In Halcyon's Security center** it has its own page (status, services, alerts, a scan button) and an **Exceptions** page, next to the firewall on the overview. Root actions open in
+  Halcyon's console and ask for your password; nothing runs behind your back. Add yourself to the `ai-antivirus` group (and log in again) so the page can read the alerts.
+- **It explains itself.** `ai-antivirus ask` (and the Security center's *Ask* tab) answers from live facts and also knows what AI Antivirus is, how it differs from a signature scanner such as ClamAV
+  (it watches what programs do; ClamAV matches files against known samples, and has a far bigger sample library), and its honest limits.
+- **ClamAV sits beside it, not inside it.** Halcyon's ClamAV page tests that ClamAV works and scans a folder; the local model then judges each finding and may turn a false positive of a guessing kind
+  (heuristic, PUA) into an exception tied to the file's hash. Named malware signatures are never excepted. The two scanners complement each other: [docs in Halcyon](https://github.com/X-netrunner/Halcyon/blob/main/docs/antivirus.md).
+- **Halcyon's installer gets a narrow exception**, so the systemd units it writes on update are not reported. It matches two exact script paths and nothing broader.
+- **Luna** can read it ("what is the antivirus saying?" runs `ai-antivirus status`, `alerts`) and, only when you have allowed it (her developer-signed capability gate, and admin rights), scan a path,
+  acknowledge alerts or add a narrow exception. The model never decides or acts on its own.
+- Halcyon's installer sets it up: `./install.sh --antivirus` builds the package; `--no-antivirus` removes it (its config is kept).
+
+![The Security center overview: firewall and antivirus side by side](docs/halcyon-security.webp)
+
+![Halcyon's ClamAV page next to it](docs/halcyon-clamav.webp)
+
 ## Requirements
 
 M0 needs no kernel features. The M1 sensor daemon needs fanotify (`CONFIG_FANOTIFY`, standard on Arch kernels) and runs as root; without `CAP_SYS_ADMIN` it still runs, with `/proc` polling only.
