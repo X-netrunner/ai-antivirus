@@ -28,18 +28,38 @@ const PREFERRED: &[&str] = &[
 const PLACEHOLDER: &str = "set-your-local-model";
 const ALERTS_IN_CONTEXT: usize = 15;
 
+/// What AI Antivirus is and how it differs from a classic signature scanner (ClamAV) or a cloud antivirus. Fixed, and only
+/// claims what the code and docs/GAPS.md support, so the model can answer "why use this" without inventing features.
+const ABOUT: &str = "\
+## About AI Antivirus (fixed facts, always true)\n\
+- It is a host EDR for Linux, not only a file scanner: a sensor (eBPF, fanotify, /proc) sees programs starting, files written \
+and network connections as they happen; an engine judges them with pacman trust (is the file from a package and unchanged), a \
+hash table, YARA rules and behaviour rules (for example a download piped into a shell, a new autostart entry, a program run from /tmp).\n\
+- A signature scanner such as ClamAV only matches file contents against known samples. It does not see behaviour, so it misses \
+a new or self-made script that does something bad, and it is quiet about a clean-looking file that behaves badly. AI Antivirus \
+looks at what runs, so it can flag what no signature knows yet; ClamAV is better at a huge library of known samples. They \
+complement each other and can run together.\n\
+- It runs entirely on this computer: no cloud upload of your files, no account, no telemetry. The optional local model only \
+advises and explains; it never decides or acts, and every automatic response (freeze, kill, quarantine, block) is off in the \
+default alert-only mode, needs approval above a set level, has a budget, an undo record and a circuit breaker.\n\
+- It protects itself (signed rules, watchdog, own-file checks) and exceptions are narrow (exact program path, never a shell).\n\
+- Honest limits: it is young (the two-week soak on a real desktop is still open), it does not scan a file before it runs yet, \
+it has a much smaller sample library than commercial antivirus, and enforcement has only been tried on harmless test targets. \
+Do not claim it catches everything, or that it replaces updates, backups or care.\n\n";
+
 fn system_prompt(facts: &str) -> String {
     format!(
         "You are the help assistant of AI Antivirus, the antivirus and EDR on this Arch Linux desktop. It watches programs, \
 files and connections, checks files with pacman trust, a hash table, YARA and behaviour rules, and raises alerts. \
-Answer the user's question using ONLY the facts below, collected just now.\n\
+Answer the user's question using ONLY the facts below, collected just now, and the fixed facts about AI Antivirus.\n\
 Rules:\n\
 - Be short and concrete: what happened, how serious it is, what to do. Plain text, no headings.\n\
 - If the facts do not answer the question, say so and say what to check.\n\
+- When asked why to use it, or how it compares with another antivirus, answer from the About section, including the honest limits.\n\
 - You may name these commands for the user to run, and no others: ai-antivirus alerts, ai-antivirus ack <id>, \
 ai-antivirus scan <path>, ai-antivirus actions, sudo ai-antivirus approve <id>, sudo ai-antivirus reject <id>, \
 sudo ai-antivirus undo <id>, ai-antivirus rules.\n\
-- Never tell the user to switch AI Antivirus off.\n\n{facts}"
+- Never tell the user to switch AI Antivirus off.\n\n{ABOUT}{facts}"
     )
 }
 
@@ -219,6 +239,8 @@ mod tests {
             "{f}"
         );
         assert!(system_prompt(&f).contains("Never tell the user to switch AI Antivirus off"));
+        let p = system_prompt(&f);
+        assert!(p.contains("ClamAV") && p.contains("Honest limits"), "{p}");
     }
 
     #[test]
