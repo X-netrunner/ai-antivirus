@@ -210,10 +210,15 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare_cached("SELECT body FROM events ORDER BY id DESC LIMIT ?1")?;
-        let rows = stmt.query_map([limit], |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map([limit], |r| {
+            let s = r.get_ref(0)?.as_str()?;
+            serde_json::from_str::<Envelope>(s).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+            })
+        })?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(serde_json::from_str::<Envelope>(&row?)?);
+            out.push(row?);
         }
         out.reverse();
         Ok(out)
@@ -353,14 +358,20 @@ pub struct AlertRow {
     pub acknowledged: bool,
 }
 
-const ALERT_COLS: &str =
-    "id, ts_ns, rule_id, severity, confidence, title, pid, proc_start_ns, detail, acknowledged";
+macro_rules! alert_cols {
+    () => {
+        "id, ts_ns, rule_id, severity, confidence, title, pid, proc_start_ns, detail, acknowledged"
+    };
+}
+
+#[allow(dead_code)]
+const ALERT_COLS: &str = alert_cols!();
 
 fn alert_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AlertRow> {
     let pid: Option<i64> = r.get(6)?;
     let start: Option<i64> = r.get(7)?;
-    let sev: String = r.get(3)?;
-    let detail: String = r.get(8)?;
+    let sev = r.get_ref(3)?.as_str()?;
+    let detail = r.get_ref(8)?.as_str()?;
     let ack: i64 = r.get(9)?;
     let proc_key = match (pid, start) {
         (Some(p), Some(s)) => Some(ProcKey {
@@ -378,7 +389,7 @@ fn alert_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AlertRow> {
         confidence: r.get(4)?,
         title: r.get(5)?,
         proc_key,
-        detail: serde_json::from_str(&detail).unwrap_or(serde_json::Value::Null),
+        detail: serde_json::from_str(detail).unwrap_or(serde_json::Value::Null),
         acknowledged: ack != 0,
     })
 }
@@ -399,8 +410,8 @@ impl Store {
     /// The newest `limit` alerts, oldest first.
     pub fn recent_alerts(&self, limit: usize) -> Result<Vec<AlertRow>> {
         let limit = i64::try_from(limit.min(MAX_RECENT)).unwrap_or(0);
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT {ALERT_COLS} FROM alerts ORDER BY id DESC LIMIT ?1"
+        let mut stmt = self.conn.prepare_cached(concat!(
+            "SELECT ", alert_cols!(), " FROM alerts ORDER BY id DESC LIMIT ?1"
         ))?;
         let mut out = stmt
             .query_map([limit], alert_row)?
@@ -412,7 +423,7 @@ impl Store {
     pub fn get_alert(&self, id: i64) -> Result<Option<AlertRow>> {
         let mut stmt = self
             .conn
-            .prepare(&format!("SELECT {ALERT_COLS} FROM alerts WHERE id = ?1"))?;
+            .prepare_cached(concat!("SELECT ", alert_cols!(), " FROM alerts WHERE id = ?1"))?;
         let mut rows = stmt.query_map([id], alert_row)?;
         Ok(rows.next().transpose()?)
     }
@@ -422,7 +433,7 @@ impl Store {
         let mut n = 0;
         let mut stmt = self
             .conn
-            .prepare("UPDATE alerts SET acknowledged = 1 WHERE id = ?1 AND acknowledged = 0")?;
+            .prepare_cached("UPDATE alerts SET acknowledged = 1 WHERE id = ?1 AND acknowledged = 0")?;
         for id in ids {
             n += stmt.execute([id])?;
         }
@@ -440,8 +451,8 @@ impl Store {
     /// The newest `limit` alerts not acknowledged yet, oldest first.
     pub fn unacked_alerts(&self, limit: usize) -> Result<Vec<AlertRow>> {
         let limit = i64::try_from(limit.min(MAX_RECENT)).unwrap_or(0);
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT {ALERT_COLS} FROM alerts WHERE acknowledged = 0 ORDER BY id DESC LIMIT ?1"
+        let mut stmt = self.conn.prepare_cached(concat!(
+            "SELECT ", alert_cols!(), " FROM alerts WHERE acknowledged = 0 ORDER BY id DESC LIMIT ?1"
         ))?;
         let mut out = stmt
             .query_map([limit], alert_row)?
@@ -656,12 +667,18 @@ pub struct ProposalRow {
     pub reason: Option<String>,
 }
 
-const ACTION_COLS: &str =
-    "id, ts_ns, alert_id, rule_id, action, level, target, status, undo, error, decided_by";
+macro_rules! action_cols {
+    () => {
+        "id, ts_ns, alert_id, rule_id, action, level, target, status, undo, error, decided_by"
+    };
+}
+
+#[allow(dead_code)]
+const ACTION_COLS: &str = action_cols!();
 
 fn action_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ActionRow> {
-    let target: String = r.get(6)?;
-    let status: String = r.get(7)?;
+    let target = r.get_ref(6)?.as_str()?;
+    let status = r.get_ref(7)?.as_str()?;
     let undo: Option<String> = r.get(8)?;
     Ok(ActionRow {
         id: r.get(0)?,
@@ -670,7 +687,7 @@ fn action_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ActionRow> {
         rule_id: r.get(3)?,
         action: r.get(4)?,
         level: u8::try_from(r.get::<_, i64>(5)?).unwrap_or(0),
-        target: serde_json::from_str(&target).unwrap_or(serde_json::Value::Null),
+        target: serde_json::from_str(target).unwrap_or(serde_json::Value::Null),
         // the CHECK constraint keeps this valid
         status: status.parse().unwrap_or(ActionStatus::Failed),
         undo: undo.and_then(|u| serde_json::from_str(&u).ok()),
@@ -722,7 +739,7 @@ impl Store {
     pub fn get_action(&self, id: i64) -> Result<Option<ActionRow>> {
         let mut stmt = self
             .conn
-            .prepare(&format!("SELECT {ACTION_COLS} FROM actions WHERE id = ?1"))?;
+            .prepare_cached(concat!("SELECT ", action_cols!(), " FROM actions WHERE id = ?1"))?;
         let mut rows = stmt.query_map([id], action_row)?;
         Ok(rows.next().transpose()?)
     }
@@ -730,8 +747,8 @@ impl Store {
     /// The newest `limit` actions, oldest first.
     pub fn recent_actions(&self, limit: usize) -> Result<Vec<ActionRow>> {
         let limit = i64::try_from(limit.min(MAX_RECENT)).unwrap_or(0);
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT {ACTION_COLS} FROM actions ORDER BY id DESC LIMIT ?1"
+        let mut stmt = self.conn.prepare_cached(concat!(
+            "SELECT ", action_cols!(), " FROM actions ORDER BY id DESC LIMIT ?1"
         ))?;
         let mut out = stmt
             .query_map([limit], action_row)?
@@ -838,8 +855,8 @@ impl Store {
     /// Alerts newer than `after_id` (oldest first), for followers such as the notifier and the AI spool.
     pub fn alerts_after(&self, after_id: i64, limit: usize) -> Result<Vec<AlertRow>> {
         let limit = i64::try_from(limit.min(MAX_RECENT)).unwrap_or(0);
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT {ALERT_COLS} FROM alerts WHERE id > ?1 ORDER BY id ASC LIMIT ?2"
+        let mut stmt = self.conn.prepare_cached(concat!(
+            "SELECT ", alert_cols!(), " FROM alerts WHERE id > ?1 ORDER BY id ASC LIMIT ?2"
         ))?;
         let out = stmt
             .query_map(params![after_id, limit], alert_row)?
@@ -849,8 +866,8 @@ impl Store {
 
     /// Actions waiting for a human decision, oldest first.
     pub fn pending_actions(&self) -> Result<Vec<ActionRow>> {
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT {ACTION_COLS} FROM actions WHERE status = 'pending' ORDER BY id ASC LIMIT {MAX_RECENT}"
+        let mut stmt = self.conn.prepare_cached(concat!(
+            "SELECT ", action_cols!(), " FROM actions WHERE status = 'pending' ORDER BY id ASC LIMIT 10000"
         ))?;
         let out = stmt
             .query_map([], action_row)?
