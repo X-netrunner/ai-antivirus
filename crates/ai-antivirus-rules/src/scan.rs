@@ -178,10 +178,16 @@ impl Yara {
     }
 
     /// Read an open file (already checked by `open_regular`) and scan it.
-    pub fn scan_file(&self, mut file: &File, len: u64) -> Result<Vec<YaraHit>> {
-        let mut data = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
-        file.read_to_end(&mut data)
+    pub fn scan_file(&self, file: &File, len: u64) -> Result<Vec<YaraHit>> {
+        let mut data = Vec::new();
+        file.take(len.saturating_add(1))
+            .read_to_end(&mut data)
             .map_err(|e| Error::Scan(e.to_string()))?;
+        if data.len() as u64 > len {
+            return Err(Error::Scan(
+                "file grew beyond checked size while scanning".into(),
+            ));
+        }
         self.scan_bytes(&data)
     }
 }
@@ -215,6 +221,18 @@ rule eicar_test_file {
   condition:
     $e at 32 or $e
 }"#;
+
+    #[test]
+    fn growing_file_is_rejected() {
+        let y = Yara::from_source(EICAR_RULE, Duration::from_secs(5)).unwrap();
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(EICAR).unwrap();
+        use std::io::{Seek, SeekFrom};
+        file.seek(SeekFrom::Start(0)).unwrap();
+        assert!(y.scan_file(&file, 4).is_err());
+        file.seek(SeekFrom::Start(0)).unwrap();
+        assert_eq!(y.scan_file(&file, EICAR.len() as u64).unwrap().len(), 1);
+    }
 
     #[test]
     fn eicar_is_found_and_clean_data_is_not() {
