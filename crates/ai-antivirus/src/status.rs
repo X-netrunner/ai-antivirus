@@ -139,7 +139,7 @@ pub fn gather(inp: &Inputs) -> Value {
 
 fn show(v: &Value) -> String {
     match v {
-        Value::Null => "-".into(),
+        Value::Null => "unknown".into(),
         Value::String(s) => s.clone(),
         other => other.to_string(),
     }
@@ -206,6 +206,19 @@ pub fn human(v: &Value, now_unix: u64) -> String {
             "some figures need the ai-antivirus group or root".into(),
         );
     }
+    out.push_str("\nNext steps\n");
+    if v["config_ok"] == Value::Bool(false) {
+        out.push_str("  Fix the configuration error above, then run ai-antivirus status again.\n");
+    }
+    for name in ["sensord", "engined", "responderd"] {
+        if v["services"][name].as_str().is_some_and(|s| s != "active") {
+            out.push_str(&format!("  Inspect {name}: systemctl status ai-antivirus-{name} --no-pager\n"));
+        }
+    }
+    if v["unacked"].as_u64().unwrap_or(0) > 0 {
+        out.push_str("  Review outstanding alerts: ai-antivirus alerts\n");
+    }
+    out.push_str("  Explore available commands: ai-antivirus --help\n");
     out
 }
 

@@ -16,6 +16,7 @@ mod render;
 mod respond;
 mod sign;
 mod status;
+mod selftest;
 mod update;
 
 use std::io::{self, Write};
@@ -46,6 +47,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Verify configured YARA detection with in-memory EICAR and a clean control.
+    SelfTest {
+        #[arg(long)]
+        json: bool,
+    },
     /// Validate the configuration file and summarize it.
     ConfigCheck {
         /// Also print the effective configuration as TOML.
@@ -366,6 +372,7 @@ fn main() -> ExitCode {
         Command::Ack { ids, all, db } => {
             Some(detect::ack(&cli.config, db.as_deref(), ids, *all).map(|()| false))
         }
+        Command::SelfTest { json } => Some(selftest::run(&cli.config, *json)),
         Command::Status { json } => Some(status::status(&cli.config, *json).map(|()| false)),
         Command::Exceptions { action, json } => Some(
             match action {
@@ -581,6 +588,7 @@ fn run(cli: &Cli) -> Result<(), Error> {
         ),
         Command::Alerts { .. }
         | Command::Ack { .. }
+        | Command::SelfTest { .. }
         | Command::Status { .. }
         | Command::Exceptions { .. }
         | Command::Ask { .. }

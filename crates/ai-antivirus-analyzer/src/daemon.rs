@@ -101,6 +101,50 @@ impl Budget {
     }
 }
 
+/// Attempts are reserved durably before inference, including attempts interrupted by a crash.
+#[derive(Default, Serialize, Deserialize)]
+struct Recovery {
+    attempts: HashMap<i64, u32>,
+    retry_unix: HashMap<i64, u64>,
+    completed: Option<Answer>,
+}
+
+impl Recovery {
+    fn load(path: &Path) -> Result<Self, String> {
+        match fs::read(path) {
+            Ok(bytes) => {
+                serde_json::from_slice(&bytes).map_err(|e| format!("invalid recovery journal: {e}"))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    fn save(&self, path: &Path) -> Result<(), String> {
+        let bytes = serde_json::to_vec(self).map_err(|e| e.to_string())?;
+        if fs::read(path).is_ok_and(|existing| existing == bytes) {
+            return Ok(());
+        }
+        let tmp = path.with_extension("tmp");
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|e| e.to_string())?;
+        f.write_all(&bytes).map_err(|e| e.to_string())?;
+        f.sync_all().map_err(|e| e.to_string())?;
+        fs::rename(tmp, path).map_err(|e| e.to_string())?;
+        if let Some(parent) = path.parent() {
+            fs::File::open(parent)
+                .and_then(|f| f.sync_all())
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+}
+
 pub fn run(cfg: &Config, shutdown: &AtomicBool) -> Result<(), String> {
     if !cfg.ai.enabled {
         return Err("ai.enabled is false in the configuration; nothing to do".into());
@@ -119,44 +163,97 @@ pub fn run(cfg: &Config, shutdown: &AtomicBool) -> Result<(), String> {
         max: cfg.ai.max_per_hour as usize,
         times: VecDeque::new(),
     };
-    let mut tries: HashMap<i64, u32> = HashMap::new();
+    let journal_path = out.join(".recovery.state");
+    let mut recovery = Recovery::load(&journal_path)?;
+    let mut retry_after: HashMap<i64, Instant> = HashMap::new();
+    let now = ai_antivirus_common::event::now_ns() / 1_000_000_000;
+    for (&id, &deadline) in &recovery.retry_unix {
+        retry_after.insert(
+            id,
+            Instant::now() + Duration::from_secs(deadline.saturating_sub(now).min(60)),
+        );
+    }
     info!(model = %cfg.ai.model, endpoint = %cfg.ai.endpoint, spool = %spool.display(), "analyzer running (advice only)");
 
     while !shutdown.load(Ordering::Relaxed) {
+        if let Err(e) = recovery.save(&journal_path) {
+            warn!(error = %e, "recovery journal unavailable; pausing inference without discarding results");
+            sleep_unless(BACKOFF, shutdown);
+            continue;
+        }
+        if let Some(answer) = recovery.completed.as_ref() {
+            match write_answer(&out, answer) {
+                Ok(()) => {
+                    recovery.completed = None;
+                    recovery.save(&journal_path)?;
+                }
+                Err(e) => {
+                    warn!(error = %e, "answer storage unavailable; retaining result for retry");
+                    sleep_unless(BACKOFF, shutdown);
+                    continue;
+                }
+            }
+        }
         let todo = pending(&spool, &out);
-        let Some((id, path)) = todo.into_iter().next() else {
+        recovery
+            .attempts
+            .retain(|id, _| todo.iter().any(|(pending, _)| pending == id));
+        recovery
+            .retry_unix
+            .retain(|id, _| todo.iter().any(|(pending, _)| pending == id));
+        retry_after.retain(|id, _| todo.iter().any(|(pending, _)| pending == id));
+        let Some((id, path)) = todo
+            .into_iter()
+            .find(|(id, _)| retry_ready(&retry_after, *id, Instant::now()))
+        else {
             thread::sleep(POLL);
             continue;
         };
+        if recovery.attempts.get(&id).copied().unwrap_or(0) >= MAX_TRIES {
+            recovery.completed = Some(Answer {
+                alert_id: id,
+                ts_ns: ai_antivirus_common::event::now_ns(),
+                model: cfg.ai.model.clone(),
+                raw: None,
+                error: Some("retry limit reached, including interrupted attempts".into()),
+            });
+            continue;
+        }
         if !budget.take() {
             warn!(id, "hourly budget used up; waiting");
-            thread::sleep(Duration::from_secs(60));
+            sleep_unless(Duration::from_secs(60), shutdown);
             continue;
         }
         let bundle = match read_bundle(&path) {
             Ok(b) => b,
             Err(e) => {
                 warn!(id, error = %e, "bad bundle");
-                let _ = write_answer(
-                    &out,
-                    &Answer {
-                        alert_id: id,
-                        ts_ns: ai_antivirus_common::event::now_ns(),
-                        model: cfg.ai.model.clone(),
-                        raw: None,
-                        error: Some(e),
-                    },
-                );
+                recovery.completed = Some(Answer {
+                    alert_id: id,
+                    ts_ns: ai_antivirus_common::event::now_ns(),
+                    model: cfg.ai.model.clone(),
+                    raw: None,
+                    error: Some(e),
+                });
                 continue;
             }
         };
+        let attempt = recovery.attempts.entry(id).or_default();
+        *attempt += 1;
+        let attempt = *attempt;
+        let delay = BACKOFF * (1 << (attempt - 1).min(1));
+        recovery.retry_unix.insert(
+            id,
+            ai_antivirus_common::event::now_ns() / 1_000_000_000 + delay.as_secs(),
+        );
+        recovery.save(&journal_path)?;
         match ollama::chat(
             &cfg.ai.endpoint,
             timeout,
             &ollama::request(&cfg.ai.model, &bundle, &ollama::new_marker()),
         ) {
             Ok(raw) => {
-                tries.remove(&id);
+                recovery.attempts.remove(&id);
                 info!(id, bytes = raw.len(), "answer received");
                 let a = Answer {
                     alert_id: id,
@@ -165,32 +262,27 @@ pub fn run(cfg: &Config, shutdown: &AtomicBool) -> Result<(), String> {
                     raw: Some(raw),
                     error: None,
                 };
-                if let Err(e) = write_answer(&out, &a) {
-                    warn!(id, error = %e, "cannot write the answer");
-                }
+                recovery.completed = Some(a);
             }
             Err(e) => {
-                let n = tries.entry(id).or_insert(0);
-                *n += 1;
-                warn!(id, try_ = *n, error = %e, "the model did not answer; the rest of AI Antivirus is not affected");
-                if *n >= MAX_TRIES {
-                    tries.remove(&id);
-                    let _ = write_answer(
-                        &out,
-                        &Answer {
-                            alert_id: id,
-                            ts_ns: ai_antivirus_common::event::now_ns(),
-                            model: cfg.ai.model.clone(),
-                            raw: None,
-                            error: Some(e),
-                        },
-                    );
+                let n = attempt;
+                warn!(id, try_ = n, error = %e, "the model did not answer; the rest of AI Antivirus is not affected");
+                if n >= MAX_TRIES {
+                    recovery.attempts.remove(&id);
+                    recovery.completed = Some(Answer {
+                        alert_id: id,
+                        ts_ns: ai_antivirus_common::event::now_ns(),
+                        model: cfg.ai.model.clone(),
+                        raw: None,
+                        error: Some(e),
+                    });
                 } else {
-                    sleep_unless(BACKOFF, shutdown);
+                    retry_after.insert(id, Instant::now() + BACKOFF * (1 << (n - 1)));
                 }
             }
         }
     }
+    recovery.save(&journal_path)?;
     info!("analyzer stopped");
     Ok(())
 }
@@ -291,5 +383,49 @@ mod tests {
         let link = dir.path().join("2.json");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         assert!(read_bundle(&link).is_err(), "symlink");
+    }
+}
+
+fn retry_ready(retries: &HashMap<i64, Instant>, id: i64, now: Instant) -> bool {
+    retries.get(&id).is_none_or(|at| now >= *at)
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    #[test]
+    fn cooling_alert_does_not_block_other_alerts() {
+        let now = Instant::now();
+        let retries = HashMap::from([(1, now + BACKOFF)]);
+        assert!(!retry_ready(&retries, 1, now));
+        assert!(retry_ready(&retries, 2, now));
+        assert!(retry_ready(&retries, 1, now + BACKOFF));
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+    #[test]
+    fn restart_preserves_attempts_and_completed_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("recovery.json");
+        let mut journal = Recovery::default();
+        journal.attempts.insert(42, MAX_TRIES);
+        journal.retry_unix.insert(42, 100);
+        journal.completed = Some(Answer {
+            alert_id: 42,
+            ts_ns: 0,
+            model: "test".into(),
+            raw: Some("answer".into()),
+            error: None,
+        });
+        journal.save(&path).unwrap();
+        let loaded = Recovery::load(&path).unwrap();
+        assert_eq!(loaded.attempts[&42], MAX_TRIES);
+        assert_eq!(loaded.retry_unix[&42], 100);
+        assert_eq!(loaded.completed, journal.completed);
+        fs::write(&path, "broken").unwrap();
+        assert!(Recovery::load(&path).is_err());
     }
 }

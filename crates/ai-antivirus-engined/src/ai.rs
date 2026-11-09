@@ -406,6 +406,7 @@ mod tests {
         let c = cfg(dir.path());
         let store = Store::open_in_memory().unwrap();
         let out = c.ai_out_dir();
+        fs::write(out.join(".recovery.state"), "persistent retry journal").unwrap();
         fs::write(out.join("1.json"), "not json").unwrap();
         fs::write(
             out.join("2.json"),
@@ -420,6 +421,7 @@ mod tests {
         let n = import_answers(&c, &store);
         assert_eq!((n.notes, n.errors), (0, 3));
         assert_eq!(count_json(&out), 0);
+        assert_eq!(fs::read_to_string(out.join(".recovery.state")).unwrap(), "persistent retry journal");
         assert!(store.recent_ai_notes(5).unwrap().is_empty());
     }
 }
