@@ -25,7 +25,7 @@ use ai_antivirus_common::event::{now_ns, Envelope};
 use ai_antivirus_common::eventlog::{self, Follower};
 use ai_antivirus_common::exceptions::{self, Matcher};
 use ai_antivirus_common::notify::Heartbeat;
-use ai_antivirus_common::store::{NewAlert, Store};
+use ai_antivirus_common::store::{AlertRow, NewAlert, Store};
 use ai_antivirus_rules::rule::RuleSet;
 use ai_antivirus_rules::scan::Yara;
 use tracing::{error, info, warn};
@@ -166,6 +166,21 @@ fn parse(line: &[u8]) -> Option<Envelope> {
     serde_json::from_slice(line).ok()
 }
 
+fn spool_with_memory(cfg: &Config, store: &Store, row: &AlertRow) {
+    let exe = row.detail.get("exe").and_then(|v| v.as_str());
+    let prior_rows = store.get_ai_feedback(&row.rule_id, exe).unwrap_or_default();
+    let feedback = prior_rows
+        .into_iter()
+        .map(|f| ai_antivirus_analyzer::bundle::PriorFeedback {
+            rule_id: f.rule_id,
+            exe: f.exe,
+            verdict: f.verdict,
+            user_notes: f.user_notes,
+        })
+        .collect();
+    ai::spool_alert_with_feedback(cfg, row, feedback);
+}
+
 /// The daemon: warm up from the current log, then follow it until `shutdown`.
 pub fn run(cfg: &Config, shutdown: &AtomicBool) -> Result<(), String> {
     selfguard::verify_rules(cfg, &cfg.engine.rules_dir).map_err(|e| {
@@ -231,7 +246,7 @@ pub fn run(cfg: &Config, shutdown: &AtomicBool) -> Result<(), String> {
                 warn!(rule = %a.rule_id, severity = a.severity.as_str(), title = %a.title, pid = a.proc_key.map(|k| k.pid), action = a.action.as_str(), "ALERT");
                 if let Some(id) = store_alert(&store, &a) {
                     if let Ok(Some(row)) = store.get_alert(id) {
-                        ai::spool_alert(cfg, &row);
+                        spool_with_memory(cfg, &store, &row);
                     }
                 }
             }
@@ -246,7 +261,7 @@ pub fn run(cfg: &Config, shutdown: &AtomicBool) -> Result<(), String> {
                 warn!(rule = %a.rule_id, severity = a.severity.as_str(), title = %a.title, pid = a.proc_key.map(|k| k.pid), action = a.action.as_str(), "ALERT");
                 if let Some(id) = store_alert(&store, &a) {
                     if let Ok(Some(row)) = store.get_alert(id) {
-                        ai::spool_alert(cfg, &row);
+                        spool_with_memory(cfg, &store, &row);
                     }
                 }
             }

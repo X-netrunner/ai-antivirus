@@ -78,6 +78,16 @@ pub struct FileInfo {
     pub ips: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PriorFeedback {
+    pub rule_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exe: Option<String>,
+    pub verdict: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub user_notes: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Bundle {
     pub alert_id: i64,
@@ -88,6 +98,8 @@ pub struct Bundle {
     pub file: Option<FileInfo>,
     /// The event's own facts (destination, path, window counts ...), as the engine stored them.
     pub evidence: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prior_feedback: Vec<PriorFeedback>,
 }
 
 /// Runs of printable ASCII of at least `MIN_STRING_LEN` characters, like `strings(1)`, longest 160 characters each.
@@ -205,6 +217,14 @@ fn libc_flags() -> i32 {
 
 impl Bundle {
     pub fn from_alert(alert: &AlertRow, with_file: bool) -> Bundle {
+        Self::from_alert_with_feedback(alert, with_file, Vec::new())
+    }
+
+    pub fn from_alert_with_feedback(
+        alert: &AlertRow,
+        with_file: bool,
+        prior_feedback: Vec<PriorFeedback>,
+    ) -> Bundle {
         let d = &alert.detail;
         let s = |k: &str| d.get(k).and_then(|v| v.as_str()).map(str::to_owned);
         let argv: Vec<String> = d
@@ -236,6 +256,7 @@ impl Bundle {
             },
             file,
             evidence: d.clone(),
+            prior_feedback,
         }
     }
 

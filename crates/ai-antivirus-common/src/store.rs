@@ -19,15 +19,17 @@ use crate::error::{Error, Result};
 use crate::event::{Envelope, ProcKey, Sha256};
 use crate::model::{ActionStatus, HashClass, ProposalStatus, Severity};
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 const SCHEMA_V1: &str = include_str!("schema_v1.sql");
 const SCHEMA_V2: &str = include_str!("schema_v2.sql");
 const SCHEMA_V3: &str = include_str!("schema_v3.sql");
+const SCHEMA_V4: &str = include_str!("schema_v4.sql");
 
 /// Fixed table list used for statistics. Never built from outside input.
-const TABLES: [&str; 10] = [
+const TABLES: [&str; 11] = [
     "state",
     "ai_notes",
+    "ai_feedback",
     "events",
     "alerts",
     "verdicts",
@@ -156,6 +158,9 @@ impl Store {
             }
             if found < 3 {
                 tx.execute_batch(SCHEMA_V3)?;
+            }
+            if found < 4 {
+                tx.execute_batch(SCHEMA_V4)?;
             }
             tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
             tx.commit()?;
@@ -945,6 +950,111 @@ impl Store {
     pub fn get_proposal(&self, id: i64) -> Result<Option<ProposalRow>> {
         Ok(self.proposals(MAX_RECENT)?.into_iter().find(|p| p.id == id))
     }
+
+    /// Record a user decision or verified feedback on an alert / pattern for self-healing.
+    pub fn insert_ai_feedback(&self, fb: &AiFeedbackRow) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO ai_feedback (ts_ns, alert_id, rule_id, exe, sha256, title, verdict, user_notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                to_i64(fb.ts_ns, "ts_ns")?,
+                fb.alert_id,
+                fb.rule_id,
+                fb.exe,
+                fb.sha256,
+                fb.title,
+                fb.verdict,
+                fb.user_notes,
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Retrieve feedback entries matching a given rule_id, optionally matching exe as well.
+    pub fn get_ai_feedback(&self, rule_id: &str, exe: Option<&str>) -> Result<Vec<AiFeedbackRow>> {
+        let mut stmt = if exe.is_some() {
+            self.conn.prepare(
+                "SELECT id, ts_ns, alert_id, rule_id, exe, sha256, title, verdict, user_notes
+                 FROM ai_feedback WHERE rule_id = ?1 AND (exe = ?2 OR exe IS NULL)
+                 ORDER BY id DESC LIMIT 50",
+            )?
+        } else {
+            self.conn.prepare(
+                "SELECT id, ts_ns, alert_id, rule_id, exe, sha256, title, verdict, user_notes
+                 FROM ai_feedback WHERE rule_id = ?1
+                 ORDER BY id DESC LIMIT 50",
+            )?
+        };
+
+        let map_row = |r: &rusqlite::Row| -> rusqlite::Result<AiFeedbackRow> {
+            Ok(AiFeedbackRow {
+                id: r.get(0)?,
+                ts_ns: u64::try_from(r.get::<_, i64>(1)?).unwrap_or(0),
+                alert_id: r.get(2)?,
+                rule_id: r.get(3)?,
+                exe: r.get(4)?,
+                sha256: r.get(5)?,
+                title: r.get(6)?,
+                verdict: r.get(7)?,
+                user_notes: r.get(8)?,
+            })
+        };
+
+        let rows = if let Some(e) = exe {
+            stmt.query_map(params![rule_id, e], map_row)?
+        } else {
+            stmt.query_map(params![rule_id], map_row)?
+        };
+
+        let mut out = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        out.reverse();
+        Ok(out)
+    }
+
+    /// Retrieve the newest feedback entries.
+    pub fn recent_ai_feedback(&self, limit: usize) -> Result<Vec<AiFeedbackRow>> {
+        let limit = i64::try_from(limit.min(MAX_RECENT)).unwrap_or(0);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, ts_ns, alert_id, rule_id, exe, sha256, title, verdict, user_notes
+             FROM ai_feedback ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit], |r| {
+            Ok(AiFeedbackRow {
+                id: r.get(0)?,
+                ts_ns: u64::try_from(r.get::<_, i64>(1)?).unwrap_or(0),
+                alert_id: r.get(2)?,
+                rule_id: r.get(3)?,
+                exe: r.get(4)?,
+                sha256: r.get(5)?,
+                title: r.get(6)?,
+                verdict: r.get(7)?,
+                user_notes: r.get(8)?,
+            })
+        })?;
+        let mut out = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        out.reverse();
+        Ok(out)
+    }
+
+    /// Remove a feedback entry by ID.
+    pub fn delete_ai_feedback(&self, id: i64) -> Result<bool> {
+        let n = self.conn.execute("DELETE FROM ai_feedback WHERE id = ?1", [id])?;
+        Ok(n > 0)
+    }
+}
+
+/// A stored user feedback / safe verdict entry for self-healing.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AiFeedbackRow {
+    pub id: i64,
+    pub ts_ns: u64,
+    pub alert_id: Option<i64>,
+    pub rule_id: String,
+    pub exe: Option<String>,
+    pub sha256: Option<String>,
+    pub title: String,
+    pub verdict: String,
+    pub user_notes: String,
 }
 
 fn to_i64(v: u64, what: &'static str) -> Result<i64> {
@@ -1038,6 +1148,35 @@ mod tests {
                 ..note
             })
             .is_err());
+    }
+
+    #[test]
+    fn ai_feedback_round_trip() {
+        let store = Store::open_in_memory().unwrap();
+        let fb = AiFeedbackRow {
+            id: 0,
+            ts_ns: 100,
+            alert_id: None,
+            rule_id: "AV-B-0002".into(),
+            exe: Some("/usr/bin/make".into()),
+            sha256: None,
+            title: "Build script execution".into(),
+            verdict: "safe".into(),
+            user_notes: "Verified local build pipeline".into(),
+        };
+        let id = store.insert_ai_feedback(&fb).unwrap();
+        let matching = store.get_ai_feedback("AV-B-0002", Some("/usr/bin/make")).unwrap();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].id, id);
+        assert_eq!(matching[0].verdict, "safe");
+        assert_eq!(matching[0].user_notes, "Verified local build pipeline");
+
+        let recent = store.recent_ai_feedback(10).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].id, id);
+
+        assert!(store.delete_ai_feedback(id).unwrap());
+        assert!(store.recent_ai_feedback(10).unwrap().is_empty());
     }
 
     #[test]

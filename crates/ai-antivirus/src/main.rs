@@ -14,6 +14,7 @@ mod except;
 mod pacman;
 mod render;
 mod respond;
+mod review;
 mod sign;
 mod status;
 mod selftest;
@@ -47,8 +48,31 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Verify configured YARA detection with in-memory EICAR and a clean control.
+    /// Verify configured YARA detection against test viruses with a detailed checklist.
+    #[command(alias = "test")]
     SelfTest {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Interactively review pending alerts and query user feedback for self-healing.
+    Review {
+        /// Optional specific alert ID to review.
+        #[arg(long)]
+        alert: Option<i64>,
+    },
+    /// Mark an alert as safe and record it in self-healing memory.
+    MarkSafe {
+        /// Alert ID to mark safe.
+        alert: i64,
+        /// Optional user notes / reason.
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// List learned safe entries from self-healing memory.
+    Feedback {
+        /// Maximum entries to show.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
         #[arg(long)]
         json: bool,
     },
@@ -373,6 +397,15 @@ fn main() -> ExitCode {
             Some(detect::ack(&cli.config, db.as_deref(), ids, *all).map(|()| false))
         }
         Command::SelfTest { json } => Some(selftest::run(&cli.config, *json)),
+        Command::Review { alert } => {
+            Some(review::interactive_review(&cli.config, *alert).map(|()| false))
+        }
+        Command::MarkSafe { alert, notes } => {
+            Some(review::mark_safe(&cli.config, *alert, notes.clone()).map(|()| false))
+        }
+        Command::Feedback { limit, json } => {
+            Some(review::list_feedback(&cli.config, *limit, *json).map(|()| false))
+        }
         Command::Status { json } => Some(status::status(&cli.config, *json).map(|()| false)),
         Command::Exceptions { action, json } => Some(
             match action {
@@ -589,6 +622,9 @@ fn run(cli: &Cli) -> Result<(), Error> {
         Command::Alerts { .. }
         | Command::Ack { .. }
         | Command::SelfTest { .. }
+        | Command::Review { .. }
+        | Command::MarkSafe { .. }
+        | Command::Feedback { .. }
         | Command::Status { .. }
         | Command::Exceptions { .. }
         | Command::Ask { .. }

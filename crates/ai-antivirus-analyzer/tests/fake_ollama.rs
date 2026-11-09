@@ -64,6 +64,7 @@ fn bundle(evidence: Value) -> Bundle {
         },
         file: None,
         evidence,
+        prior_feedback: Vec::new(),
     }
 }
 

@@ -11,7 +11,7 @@ use std::io::{BufReader, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use ai_antivirus_analyzer::bundle::Bundle;
+use ai_antivirus_analyzer::bundle::{Bundle, PriorFeedback};
 use ai_antivirus_analyzer::daemon::Answer;
 use ai_antivirus_analyzer::output::{self, Validated};
 use ai_antivirus_common::config::Config;
@@ -41,6 +41,11 @@ fn count_json(dir: &Path) -> usize {
 
 /// Queue an alert for analysis when the analyzer is enabled and the alert is severe enough.
 pub fn spool_alert(cfg: &Config, alert: &AlertRow) {
+    spool_alert_with_feedback(cfg, alert, Vec::new());
+}
+
+/// Queue an alert with learned prior feedback for self-healing inference.
+pub fn spool_alert_with_feedback(cfg: &Config, alert: &AlertRow, feedback: Vec<PriorFeedback>) {
     if !cfg.ai.enabled || alert.severity < cfg.ai.min_severity {
         return;
     }
@@ -48,7 +53,7 @@ pub fn spool_alert(cfg: &Config, alert: &AlertRow) {
     if !dir.is_dir() || count_json(&dir) >= MAX_SPOOL_FILES {
         return;
     }
-    let text = Bundle::from_alert(alert, true).to_json_capped();
+    let text = Bundle::from_alert_with_feedback(alert, true, feedback).to_json_capped();
     let tmp = dir.join(format!(".{}.tmp", alert.id));
     let done = dir.join(format!("{}.json", alert.id));
     // 0640 on purpose: the engine's umask is 0077, which would make the bundle unreadable for the analyzer (another user,
@@ -176,6 +181,19 @@ fn import_one(cfg: &Config, store: &Store, path: &Path, n: &mut Imported) -> Res
         })
         .map_err(|e| e.to_string())?;
     n.notes += 1;
+    if alert_known && v.verdict == output::AiVerdict::Benign && !v.injection_suspected {
+        let _ = store.ack_alerts(&[answer.alert_id]);
+        info!(
+            alert = answer.alert_id,
+            "AI review judged alert acceptable (benign): dropped"
+        );
+    } else if v.verdict == output::AiVerdict::Suspicious || v.verdict == output::AiVerdict::Malicious {
+        warn!(
+            alert = answer.alert_id,
+            verdict = v.verdict.as_str(),
+            "AI review flagged alert as suspicious/malicious: pending user review"
+        );
+    }
     if v.injection_suspected {
         warn!(
             alert = answer.alert_id,
@@ -358,6 +376,31 @@ mod tests {
             "the answer file is consumed"
         );
         let _ = ActionStatus::Executed;
+    }
+
+    #[test]
+    fn benign_verdict_drops_alert_and_suspicious_leaves_it_for_review() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = cfg(dir.path());
+        let store = Store::open_in_memory().unwrap();
+        let a = alert(&store);
+        assert!(!a.acknowledged);
+
+        // Benign clean review -> drops (acknowledges) the alert
+        answer(&c, a.id, "benign", false, "");
+        let n = import_answers(&c, &store);
+        assert_eq!(n.notes, 1);
+        let updated = store.get_alert(a.id).unwrap().unwrap();
+        assert!(updated.acknowledged, "acceptable alert dropped by AI review");
+
+        // Another alert: suspicious review -> leaves it unacknowledged for user review
+        let a2 = alert(&store);
+        assert!(!a2.acknowledged);
+        answer(&c, a2.id, "suspicious", false, "");
+        let n2 = import_answers(&c, &store);
+        assert_eq!(n2.notes, 1);
+        let updated2 = store.get_alert(a2.id).unwrap().unwrap();
+        assert!(!updated2.acknowledged, "suspicious alert kept pending for user review");
     }
 
     #[test]
