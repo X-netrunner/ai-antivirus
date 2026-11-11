@@ -39,9 +39,7 @@ pub fn run(config: &Path, json_output: bool) -> Result<bool, String> {
     )
     .map_err(|e| e.to_string())?;
 
-    let elf = |tail: &[u8]| -> Vec<u8> {
-        [b"\x7fELF\x02\x01\x01\0".as_slice(), tail].concat()
-    };
+    let elf = |tail: &[u8]| -> Vec<u8> { [b"\x7fELF\x02\x01\x01\0".as_slice(), tail].concat() };
 
     let cases = [
         ThreatTestCase {
@@ -191,7 +189,11 @@ pub fn run(config: &Path, json_output: bool) -> Result<bool, String> {
         );
         println!(
             "Overall Verification: {}\n",
-            if all_ok { "PASS (VERIFIED EFFECTIVE)" } else { "FAIL" }
+            if all_ok {
+                "PASS (VERIFIED EFFECTIVE)"
+            } else {
+                "FAIL"
+            }
         );
     }
 

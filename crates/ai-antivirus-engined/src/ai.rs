@@ -187,7 +187,9 @@ fn import_one(cfg: &Config, store: &Store, path: &Path, n: &mut Imported) -> Res
             alert = answer.alert_id,
             "AI review judged alert acceptable (benign): dropped"
         );
-    } else if v.verdict == output::AiVerdict::Suspicious || v.verdict == output::AiVerdict::Malicious {
+    } else if v.verdict == output::AiVerdict::Suspicious
+        || v.verdict == output::AiVerdict::Malicious
+    {
         warn!(
             alert = answer.alert_id,
             verdict = v.verdict.as_str(),
@@ -391,7 +393,10 @@ mod tests {
         let n = import_answers(&c, &store);
         assert_eq!(n.notes, 1);
         let updated = store.get_alert(a.id).unwrap().unwrap();
-        assert!(updated.acknowledged, "acceptable alert dropped by AI review");
+        assert!(
+            updated.acknowledged,
+            "acceptable alert dropped by AI review"
+        );
 
         // Another alert: suspicious review -> leaves it unacknowledged for user review
         let a2 = alert(&store);
@@ -400,7 +405,10 @@ mod tests {
         let n2 = import_answers(&c, &store);
         assert_eq!(n2.notes, 1);
         let updated2 = store.get_alert(a2.id).unwrap().unwrap();
-        assert!(!updated2.acknowledged, "suspicious alert kept pending for user review");
+        assert!(
+            !updated2.acknowledged,
+            "suspicious alert kept pending for user review"
+        );
     }
 
     #[test]
@@ -464,7 +472,10 @@ mod tests {
         let n = import_answers(&c, &store);
         assert_eq!((n.notes, n.errors), (0, 3));
         assert_eq!(count_json(&out), 0);
-        assert_eq!(fs::read_to_string(out.join(".recovery.state")).unwrap(), "persistent retry journal");
+        assert_eq!(
+            fs::read_to_string(out.join(".recovery.state")).unwrap(),
+            "persistent retry journal"
+        );
         assert!(store.recent_ai_notes(5).unwrap().is_empty());
     }
 }

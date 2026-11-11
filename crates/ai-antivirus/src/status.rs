@@ -212,7 +212,9 @@ pub fn human(v: &Value, now_unix: u64) -> String {
     }
     for name in ["sensord", "engined", "responderd"] {
         if v["services"][name].as_str().is_some_and(|s| s != "active") {
-            out.push_str(&format!("  Inspect {name}: systemctl status ai-antivirus-{name} --no-pager\n"));
+            out.push_str(&format!(
+                "  Inspect {name}: systemctl status ai-antivirus-{name} --no-pager\n"
+            ));
         }
     }
     if v["unacked"].as_u64().unwrap_or(0) > 0 {

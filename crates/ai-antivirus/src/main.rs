@@ -15,9 +15,9 @@ mod pacman;
 mod render;
 mod respond;
 mod review;
+mod selftest;
 mod sign;
 mod status;
-mod selftest;
 mod update;
 
 use std::io::{self, Write};

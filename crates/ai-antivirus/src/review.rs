@@ -42,7 +42,9 @@ pub fn interactive_review(config: &Path, alert_id: Option<i64>) -> Result<(), St
     let mut lines = stdin.lock().lines();
 
     for a in &alerts {
-        println!("================================================================================");
+        println!(
+            "================================================================================"
+        );
         println!("Alert ID:     #{}", a.id);
         println!("Rule ID:      {}", a.rule_id);
         println!("Severity:     {}", a.severity.as_str());
@@ -70,9 +72,13 @@ pub fn interactive_review(config: &Path, alert_id: Option<i64>) -> Result<(), St
         } else {
             println!("\n(No local AI analyzer notes for this alert yet)");
         }
-        println!("--------------------------------------------------------------------------------");
+        println!(
+            "--------------------------------------------------------------------------------"
+        );
 
-        print!("User Verdict: [s]afe (learn & drop), [a]ck (dismiss once), [k]eep pending, [q]uit: ");
+        print!(
+            "User Verdict: [s]afe (learn & drop), [a]ck (dismiss once), [k]eep pending, [q]uit: "
+        );
         io::stdout().flush().map_err(|e| e.to_string())?;
 
         let choice = match lines.next() {
@@ -163,7 +169,10 @@ pub fn mark_safe(config: &Path, alert_id: i64, notes: Option<String>) -> Result<
     let fb_id = store.insert_ai_feedback(&fb).map_err(|e| e.to_string())?;
     store.ack_alerts(&[alert.id]).map_err(|e| e.to_string())?;
 
-    println!("✔ Alert #{} successfully marked as SAFE (Memory record #{fb_id}).", alert.id);
+    println!(
+        "✔ Alert #{} successfully marked as SAFE (Memory record #{fb_id}).",
+        alert.id
+    );
     println!("  Rule:       {}", alert.rule_id);
     if let Some(e) = exe {
         println!("  Executable: {e}");
@@ -187,7 +196,9 @@ pub fn list_feedback(config: &Path, limit: usize, json_output: bool) -> Result<(
 
     if entries.is_empty() {
         println!("No learned self-healing entries recorded yet.");
-        println!("Use `ai-antivirus review` or `ai-antivirus mark-safe <id>` to teach safe patterns.");
+        println!(
+            "Use `ai-antivirus review` or `ai-antivirus mark-safe <id>` to teach safe patterns."
+        );
         return Ok(());
     }
 
@@ -259,7 +270,9 @@ mod tests {
         assert_eq!(store.unacked_alerts(10).unwrap().len(), 0);
 
         // Feedback memory is recorded
-        let fb = store.get_ai_feedback("AV-B-0002", Some("/usr/bin/curl")).unwrap();
+        let fb = store
+            .get_ai_feedback("AV-B-0002", Some("/usr/bin/curl"))
+            .unwrap();
         assert_eq!(fb.len(), 1);
         assert_eq!(fb[0].verdict, "safe");
         assert_eq!(fb[0].user_notes, "Developer toolchain");
