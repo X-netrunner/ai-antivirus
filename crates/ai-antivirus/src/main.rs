@@ -146,6 +146,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// One status record for Halcyon (halcyon.status/1)
+    Health {
+        #[arg(long)]
+        json: bool,
+    },
     /// Services, sensor health, last event, alerts in the last 24 h, pending actions. Works without root.
     Status {
         #[arg(long)]
@@ -407,6 +412,21 @@ fn main() -> ExitCode {
             Some(review::list_feedback(&cli.config, *limit, *json).map(|()| false))
         }
         Command::Status { json } => Some(status::status(&cli.config, *json).map(|()| false)),
+        Command::Health { .. } => {
+            let sock = Config::load(&cli.config)
+                .map(|c| c.responder_socket())
+                .unwrap_or_else(|_| std::path::PathBuf::from("/run/ai-antivirus/responder.sock"));
+            let (state, detail) = if sock.exists() {
+                ("ok", "responder is listening")
+            } else {
+                ("down", "the responder service is not running")
+            };
+            println!(
+                r#"{{"schema":"halcyon.status/1","component":"ai-antivirus","version":"{}","contract":1,"state":"{state}","detail":"{detail}"}}"#,
+                env!("CARGO_PKG_VERSION")
+            );
+            Some(Ok(false))
+        }
         Command::Exceptions { action, json } => Some(
             match action {
                 None | Some(ExceptionCmd::List) => except::list(&cli.config, *json),
@@ -626,6 +646,7 @@ fn run(cli: &Cli) -> Result<(), Error> {
         | Command::MarkSafe { .. }
         | Command::Feedback { .. }
         | Command::Status { .. }
+        | Command::Health { .. }
         | Command::Exceptions { .. }
         | Command::Ask { .. }
         | Command::RulesUpdate { .. }
