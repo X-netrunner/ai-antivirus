@@ -6,7 +6,7 @@
 use std::fs::File;
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -353,13 +353,15 @@ impl Config {
                 path.display()
             ));
         }
-        if meta.permissions().mode() & 0o002 != 0 {
-            problems.push(format!(
-                "{} is world-writable; run: chmod o-w {}",
-                path.display(),
-                path.display()
-            ));
-        }
+        let running_as = std::fs::metadata("/proc/self")
+            .map(|m| m.uid())
+            .unwrap_or(u32::MAX);
+        problems.extend(permission_problems(
+            path,
+            running_as,
+            meta.uid(),
+            meta.permissions().mode(),
+        ));
         if !problems.is_empty() {
             return Err(Error::ConfigInvalid(problems));
         }
@@ -598,8 +600,47 @@ fn check_loopback_endpoint(endpoint: &str) -> std::result::Result<(), String> {
     }
 }
 
+fn permission_problems(path: &Path, running_as: u32, owner: u32, mode: u32) -> Vec<String> {
+    let mut problems = Vec::new();
+    if mode & 0o002 != 0 {
+        problems.push(format!(
+            "{} is world-writable; run: chmod o-w {}",
+            path.display(),
+            path.display()
+        ));
+    }
+    if running_as == 0 && owner != 0 {
+        problems.push(format!(
+            "{} is read by a root daemon but not owned by root; run: chown root {}",
+            path.display(),
+            path.display()
+        ));
+    }
+    if running_as == 0 && mode & 0o020 != 0 {
+        problems.push(format!(
+            "{} is group-writable but a root daemon trusts it; run: chmod g-w {}",
+            path.display(),
+            path.display()
+        ));
+    }
+    problems
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_root_daemon_only_trusts_a_root_owned_config_nobody_else_can_write() {
+        let p = Path::new("/etc/ai-antivirus/ai-antivirus.toml");
+        assert!(super::permission_problems(p, 0, 0, 0o100644).is_empty());
+        assert_eq!(super::permission_problems(p, 0, 1000, 0o100644).len(), 1);
+        assert_eq!(super::permission_problems(p, 0, 0, 0o100664).len(), 1);
+        assert_eq!(super::permission_problems(p, 0, 0, 0o100666).len(), 2);
+        assert!(
+            super::permission_problems(p, 1000, 1000, 0o100664).is_empty(),
+            "non-root runs (tests, dev) are not held to it"
+        );
+    }
     use super::*;
     use std::io::Write;
 
